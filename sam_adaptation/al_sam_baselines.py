@@ -80,6 +80,7 @@ def _parse_arguments():
                         help='Number of validation samples to use (default: use all)')
     parser.add_argument('--grid_width', type=int, default=3, help='Spatial grid width (number of columns)')
     parser.add_argument('--grid_height', type=int, default=4, help='Spatial grid height (number of rows)')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
     return parser.parse_args()
 
 
@@ -146,7 +147,7 @@ def _create_spatial_split_datasets(args):
         num_samples_per_round=args.num_samples,
         num_rounds=args.round_num,
         areas=areas,
-        seed=42,
+        seed=args.seed,
         num_validation_samples=args.num_validation_samples,
         validation_mode=args.validate_data_mode
     )
@@ -181,7 +182,7 @@ def _create_random_split_datasets(args):
     print(f"📊 Total positive documents: {len(positive_docs)}")
 
     # Shuffle documents
-    np.random.seed(42)
+    np.random.seed(args.seed)
     np.random.shuffle(positive_docs)
 
     # Calculate validation samples

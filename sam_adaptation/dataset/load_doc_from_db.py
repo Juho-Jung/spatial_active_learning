@@ -13,7 +13,7 @@ def _load_train_documents(target_lesion):
         'is_normal': {'$in': [0, 1]},
     }
 
-    documents = list(collection.find(query))
+    documents = list(collection.find(query).sort('_id', 1))  # Sort by _id for consistent ordering
 
     print(f"📊 Train Collection: {len(documents)}")
     return documents

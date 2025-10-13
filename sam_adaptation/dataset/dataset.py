@@ -67,7 +67,7 @@ class SAMLesionDataset(Dataset):
     def _load_validation_documents(self):
         """Load documents from validation_internal collection."""
         collection = mdb_c.get_collection(self.collection_name, db_names=['cxr_new', 'projects', 'public'])
-        all_docs = list(collection.find({}))
+        all_docs = list(collection.find({}).sort('_id', 1))  # Sort by _id for consistent ordering
 
         # Filter out excluded sources
         excluded_sources = ["amcio_b1_368"]
@@ -96,7 +96,7 @@ class SAMLesionDataset(Dataset):
         excluded_sources = ["amcio_b1_368"]
         query['data_source'] = {'$nin': excluded_sources}
 
-        documents = list(collection.find(query))
+        documents = list(collection.find(query).sort('_id', 1))  # Sort by _id for consistent ordering
 
         print(f"📊 Train Collection: {len(documents)} -> {len(documents)} (after filtering)")
         return documents
@@ -111,7 +111,7 @@ class SAMLesionDataset(Dataset):
             'is_normal': {'$in': [0, 1]},
         }
 
-        documents = list(collection.find(query))
+        documents = list(collection.find(query).sort('_id', 1))  # Sort by _id for consistent ordering
 
         print(f"📊 Train Collection: {len(documents)}")
         return documents
@@ -440,8 +440,11 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
                 samples_from_area = len(docs)
                 print(f"⚠️  Area {i+1}: Only {len(docs)} samples available (requested {target_per_area + (1 if i < remaining_samples else 0)})")
 
-            # Randomly sample from this area
+            # Randomly sample from this area with reproducible seed
             if samples_from_area > 0:
+                # Use area-specific seed for reproducible results
+                area_seed = seed + i
+                np.random.seed(area_seed)
                 np.random.shuffle(docs)
                 selected_docs = docs[:samples_from_area]
                 val_docs.extend(selected_docs)
@@ -469,8 +472,11 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
                 samples_from_area = max(0, len(docs) - min_samples_for_training)
                 print(f"⚠️  Area {i+1}: Limited to {samples_from_area} samples to preserve training data")
 
-            # Randomly sample from this area
+            # Randomly sample from this area with reproducible seed
             if samples_from_area > 0:
+                # Use area-specific seed for reproducible results
+                area_seed = seed + i
+                np.random.seed(area_seed)
                 np.random.shuffle(docs)
                 selected_docs = docs[:samples_from_area]
                 val_docs.extend(selected_docs)
@@ -494,6 +500,9 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
                 # Get remaining docs from this area (not already selected)
                 remaining_docs = [doc for doc in docs if doc not in val_docs]
                 if len(remaining_docs) > 0:
+                    # Use area-specific seed for reproducible results
+                    area_seed = seed + i + 1000  # Add offset to avoid collision with main selection
+                    np.random.seed(area_seed)
                     np.random.shuffle(remaining_docs)
                     selected_docs = remaining_docs[:min(additional_samples, len(remaining_docs))]
                     val_docs.extend(selected_docs)
@@ -502,7 +511,8 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
     # Create training dataset (remaining documents)
     train_docs = [doc for doc in positive_docs if doc not in val_docs]
 
-    # Shuffle the results
+    # Shuffle the results with reproducible seed
+    np.random.seed(seed + 9999)  # Use different seed for final shuffling
     np.random.shuffle(val_docs)
     np.random.shuffle(train_docs)
 
@@ -523,7 +533,7 @@ def load_raw_documents(train_collection='validation_collection', target_lesion='
     # Access the raw documents before any splitting
     if train_collection == 'validation_collection':
         collection = mdb_c.get_collection("validation_internal", db_names=['cxr_new', 'projects', 'public'])
-        all_docs = list(collection.find({}))
+        all_docs = list(collection.find({}).sort('_id', 1))  # Sort by _id for consistent ordering
 
         # Filter out excluded sources
         excluded_sources = ["amcio_b1_368"]
