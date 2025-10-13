@@ -78,8 +78,8 @@ def _parse_arguments():
                         help='Data collection to use: validation_collection or train_collection or sdc_ppm_train-0908')
     parser.add_argument('--num_validation_samples', type=int, default=None,
                         help='Number of validation samples to use (default: use all)')
-    parser.add_argument('--grid_width', type=int, default=2, help='Spatial grid width (number of columns)')
-    parser.add_argument('--grid_height', type=int, default=3, help='Spatial grid height (number of rows)')
+    parser.add_argument('--grid_width', type=int, default=5, help='Spatial grid width (number of columns)')
+    parser.add_argument('--grid_height', type=int, default=5, help='Spatial grid height (number of rows)')
     parser.add_argument('--lambda1', type=float, default=1.0,
                         help='Weight for spatial coverage term in adaptive selection')
     return parser.parse_args()
