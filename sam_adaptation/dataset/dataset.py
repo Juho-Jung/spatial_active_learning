@@ -6,22 +6,19 @@ Dataset classes for SAM adaptation project.
 import json
 import os
 from pathlib import Path
+# Add project root to path
+import sys
 
 import albumentations as A
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-# Add project root to path
-import sys
-sys.path.append('/opt/pxi')
-
 import mdb.document as mdb_d
 import mdb.load as mdb_c
 import utils.image_io as image_io
 
-# Import metrics functions
-from metrics import divide_image_into_areas
+sys.path.append('/opt/pxi')
 
 
 class SAMLesionDataset(Dataset):
@@ -103,7 +100,7 @@ class SAMLesionDataset(Dataset):
 
         print(f"📊 Train Collection: {len(documents)} -> {len(documents)} (after filtering)")
         return documents
-    
+
     def _load_sdc_ppm_train_documents(self):
         """Load documents from train collection with consensus annotations."""
         collection = mdb_c.get_collection("sdc_ppm_train-0908", db_names=['cxr_new', 'projects', 'personal'])
@@ -152,9 +149,9 @@ class SAMLesionDataset(Dataset):
     def _setup_transforms(self):
         """Setup data augmentation transforms."""
         self.transform = A.Compose([
-                A.Resize(self.target_size[0], self.target_size[1]),
-                A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            ])
+            A.Resize(self.target_size[0], self.target_size[1]),
+            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
 
         # if self.split == 'train':
         #     self.transform = A.Compose([
@@ -172,7 +169,6 @@ class SAMLesionDataset(Dataset):
         #         A.Resize(self.target_size[0], self.target_size[1]),
         #         A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         #     ])
-
 
     def _calculate_weights(self):
         """Calculate weights for weighted sampling."""
@@ -273,7 +269,26 @@ class SAMLesionDataset(Dataset):
         return image, mask
 
 
+def divide_image_into_areas(image_size=(512, 512), grid_width=2, grid_height=3):
+    """Divide chest X-ray image into 3x2 grid (6 areas total).
+    Areas are indexed as follows:
+    - Top-left: 0, Top-right: 1
+    - Middle-left: 2, Middle-right: 3
+    - Bottom-left: 4, Bottom-right: 5
+    """
+    h, w = image_size
+    area_h, area_w = h // grid_height, w // grid_width
 
+    areas = []
+    for i in range(grid_height):
+        for j in range(grid_width):
+            y_start = i * area_h
+            y_end = (i + 1) * area_h if i < grid_height - 1 else h
+            x_start = j * area_w
+            x_end = (j + 1) * area_w if j < grid_width - 1 else w
+            areas.append((y_start, y_end, x_start, x_end, i * grid_width + j))
+
+    return areas
 
 
 def _get_mask_from_doc(doc, target_lesion, target_size=(512, 512)):
@@ -310,15 +325,16 @@ def _get_mask_from_doc(doc, target_lesion, target_size=(512, 512)):
         return None
 
 
-def create_spatial_validation_split(documents, target_lesion, num_samples_per_round, num_rounds, areas=None, seed=42, num_validation_samples=None, grid_width=2, grid_height=3, split_mode='spatial_equal_split'):
+def create_spatial_validation_split(documents, target_lesion, num_samples_per_round, num_rounds, areas=None, seed=42, num_validation_samples=None, validation_mode='spatial_equal_split'):
     """
     Create validation split ensuring spatial distribution across areas.
 
     Strategy:
     1. Training: num_samples_per_round * num_rounds samples (for Active Learning)
-    2. Validation: num_validation_samples samples distributed across 3x3 spatial bins
-       - Start with equal distribution (num_validation_samples / 9 per bin)
-       - If some bins don't have enough samples, redistribute based on actual data distribution
+    2. Validation: num_validation_samples samples distributed across spatial areas based on mode:
+       - spatial_equal_split: Equal distribution across areas (num_validation_samples / num_areas per area)
+       - spatial_dynamic_split: Proportional distribution based on actual data distribution
+       - If some areas don't have enough samples, take only 50% to preserve training data
 
     Args:
         documents: List of document dictionaries
@@ -328,12 +344,13 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
         areas: List of area tuples (y_start, y_end, x_start, x_end, area_idx)
         seed: Random seed for reproducibility
         num_validation_samples: Number of validation samples (if None, use remaining samples)
+        validation_mode: Validation split mode ('spatial_equal_split' or 'spatial_dynamic_split')
 
     Returns:
         train_docs, val_docs: Lists of documents for train and validation
     """
     if areas is None:
-        areas = divide_image_into_areas(grid_width=grid_width, grid_height=grid_height)
+        areas = divide_image_into_areas()
 
     np.random.seed(seed)
 
@@ -397,28 +414,90 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
     for i, docs in enumerate(doc_area_mapping):
         print(f"   Area {i+1}: {len(docs)} documents")
 
-    # Select validation samples based on split mode
-    if split_mode == 'random_split':
-        print(f"📊 Selecting {num_validation_samples} validation samples randomly from {len(positive_docs)} total samples")
-        np.random.shuffle(positive_docs)
-        val_docs = positive_docs[:num_validation_samples]
-        area_allocations = [0] * len(areas)
-        for doc in val_docs:
-            for i, area_docs in enumerate(doc_area_mapping):
-                if doc in area_docs:
-                    area_allocations[i] += 1
-                    break
-    
-    elif split_mode == 'spatial_equal_split':
-        print(f"📊 Selecting validation samples with equal distribution across {len(areas)} areas")
-        val_docs, area_allocations = _select_equal_split(doc_area_mapping, num_validation_samples, areas)
-    
-    elif split_mode == 'spatial_dynamic_split':
-        print(f"📊 Selecting validation samples with proportional distribution across {len(areas)} areas")
-        val_docs, area_allocations = _select_dynamic_split(doc_area_mapping, num_validation_samples, areas)
-    
-    else:
-        raise ValueError(f"Unknown split_mode: {split_mode}")
+    # Select validation samples based on validation mode
+    val_docs = []
+    area_allocations = []
+
+    if validation_mode == 'spatial_equal_split':
+        # Equal distribution across areas
+        target_per_area = num_validation_samples // len(areas)
+        remaining_samples = num_validation_samples % len(areas)
+
+        print(f"📊 Target samples per area: {target_per_area} (with {remaining_samples} extra)")
+
+        for i, docs in enumerate(doc_area_mapping):
+            # Calculate how many samples to take from this area
+            samples_from_area = target_per_area
+            if i < remaining_samples:  # Distribute extra samples to first few areas
+                samples_from_area += 1
+
+            # Special case: if area has very few samples, take only 50% to preserve training data
+            min_samples_for_training = max(1, len(docs) // 2)  # Keep at least 50% for training
+            if len(docs) - samples_from_area < min_samples_for_training:
+                samples_from_area = max(0, len(docs) - min_samples_for_training)
+                print(f"⚠️  Area {i+1}: Limited to {samples_from_area} samples to preserve training data (requested {target_per_area + (1 if i < remaining_samples else 0)})")
+            elif len(docs) < samples_from_area:
+                samples_from_area = len(docs)
+                print(f"⚠️  Area {i+1}: Only {len(docs)} samples available (requested {target_per_area + (1 if i < remaining_samples else 0)})")
+
+            # Randomly sample from this area
+            if samples_from_area > 0:
+                np.random.shuffle(docs)
+                selected_docs = docs[:samples_from_area]
+                val_docs.extend(selected_docs)
+                area_allocations.append(samples_from_area)
+            else:
+                area_allocations.append(0)
+
+    elif validation_mode == 'spatial_dynamic_split':
+        # Proportional distribution based on actual data distribution
+        total_docs = sum(len(docs) for docs in doc_area_mapping)
+        distribution_ratios = [len(docs) / total_docs for docs in doc_area_mapping]
+
+        print(f"📊 Data distribution ratios: {[f'{ratio:.3f}' for ratio in distribution_ratios]}")
+
+        for i, (docs, ratio) in enumerate(zip(doc_area_mapping, distribution_ratios)):
+            # Calculate target samples for this area based on its data ratio
+            target_samples = int(num_validation_samples * ratio)
+            
+            # Ensure we don't take more than available
+            samples_from_area = min(target_samples, len(docs))
+            
+            # Special case: if area has very few samples, take only 50% to preserve training data
+            min_samples_for_training = max(1, len(docs) // 2)  # Keep at least 50% for training
+            if len(docs) - samples_from_area < min_samples_for_training:
+                samples_from_area = max(0, len(docs) - min_samples_for_training)
+                print(f"⚠️  Area {i+1}: Limited to {samples_from_area} samples to preserve training data")
+
+            # Randomly sample from this area
+            if samples_from_area > 0:
+                np.random.shuffle(docs)
+                selected_docs = docs[:samples_from_area]
+                val_docs.extend(selected_docs)
+                area_allocations.append(samples_from_area)
+            else:
+                area_allocations.append(0)
+
+    # Handle redistribution for spatial_equal_split only
+    if validation_mode == 'spatial_equal_split' and len(val_docs) < num_validation_samples:
+        needed_samples = num_validation_samples - len(val_docs)
+        print(f"📊 Need {needed_samples} more samples, redistributing based on data distribution...")
+
+        # Calculate distribution ratios
+        total_docs = sum(len(docs) for docs in doc_area_mapping)
+        distribution_ratios = [len(docs) / total_docs for docs in doc_area_mapping]
+
+        # Allocate additional samples based on ratios
+        for i, (docs, ratio) in enumerate(zip(doc_area_mapping, distribution_ratios)):
+            additional_samples = int(needed_samples * ratio)
+            if additional_samples > 0:
+                # Get remaining docs from this area (not already selected)
+                remaining_docs = [doc for doc in docs if doc not in val_docs]
+                if len(remaining_docs) > 0:
+                    np.random.shuffle(remaining_docs)
+                    selected_docs = remaining_docs[:min(additional_samples, len(remaining_docs))]
+                    val_docs.extend(selected_docs)
+                    area_allocations[i] += len(selected_docs)
 
     # Create training dataset (remaining documents)
     train_docs = [doc for doc in positive_docs if doc not in val_docs]
@@ -428,153 +507,15 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
     np.random.shuffle(train_docs)
 
     print(f"📊 Final split: {len(val_docs)} validation, {len(train_docs)} training samples")
-    print(f"📊 Data utilization: {len(val_docs) + len(train_docs)}/{len(positive_docs)} ({100*(len(val_docs) + len(train_docs))/len(positive_docs):.1f}%)")
+    print(
+        f"📊 Data utilization: {len(val_docs) + len(train_docs)}/{len(positive_docs)} ({100*(len(val_docs) + len(train_docs))/len(positive_docs):.1f}%)")
 
     # Print final area distribution
     print("📊 Final validation samples per area:")
     for i, count in enumerate(area_allocations):
-        total_in_area = len(doc_area_mapping[i])
-        if total_in_area > 0:
-            percentage = (count / total_in_area) * 100
-            print(f"   Area {i+1}: {count} samples ({percentage:.1f}% of {total_in_area} total)")
-        else:
-            print(f"   Area {i+1}: {count} samples")
+        print(f"   Area {i+1}: {count} samples")
 
     return train_docs, val_docs
-
-
-def _select_equal_split(doc_area_mapping, num_validation_samples, areas):
-    """Select validation samples with equal distribution across areas."""
-    target_per_area = num_validation_samples // len(areas)
-    remaining_samples = num_validation_samples % len(areas)
-    
-    print(f"📊 Target samples per area: {target_per_area} (with {remaining_samples} extra)")
-    
-    val_docs = []
-    area_allocations = []
-    
-    for i, docs in enumerate(doc_area_mapping):
-        samples_from_area = target_per_area
-        if i < remaining_samples:
-            samples_from_area += 1
-        
-        # Apply 50% rule for small areas (when area has fewer samples than target_per_area)
-        if len(docs) < samples_from_area:
-            if len(docs) <= target_per_area:  # Small area: use only 50% for validation
-                samples_from_area = max(1, len(docs) // 2)
-                print(f"⚠️  Area {i+1}: Only {len(docs)} samples available (target: {target_per_area + (1 if i < remaining_samples else 0)}) - using 50% rule: {samples_from_area} samples")
-            else:
-                samples_from_area = len(docs)
-                print(f"⚠️  Area {i+1}: Only {len(docs)} samples available (target: {target_per_area + (1 if i < remaining_samples else 0)}) - using all available")
-        
-        if samples_from_area > 0:
-            np.random.shuffle(docs)
-            selected_docs = docs[:samples_from_area]
-            val_docs.extend(selected_docs)
-            area_allocations.append(samples_from_area)
-        else:
-            area_allocations.append(0)
-    
-    # Redistribute remaining samples if needed
-    if len(val_docs) < num_validation_samples:
-        needed_samples = num_validation_samples - len(val_docs)
-        print(f"📊 Need {needed_samples} more samples, redistributing...")
-        
-        total_docs = sum(len(docs) for docs in doc_area_mapping)
-        distribution_ratios = [len(docs) / total_docs for docs in doc_area_mapping]
-        
-        for i, (docs, ratio) in enumerate(zip(doc_area_mapping, distribution_ratios)):
-            additional_samples = int(needed_samples * ratio)
-            if additional_samples > 0:
-                remaining_docs = [doc for doc in docs if doc not in val_docs]
-                if len(remaining_docs) > 0:
-                    # For small areas, limit additional samples to maintain 50% rule
-                    if len(docs) <= target_per_area:
-                        max_additional = max(0, len(docs) // 2 - area_allocations[i])
-                        additional_samples = min(additional_samples, max_additional)
-                    
-                    if additional_samples > 0:
-                        np.random.shuffle(remaining_docs)
-                        selected_docs = remaining_docs[:min(additional_samples, len(remaining_docs))]
-                        val_docs.extend(selected_docs)
-                        area_allocations[i] += len(selected_docs)
-    
-    return val_docs, area_allocations
-
-
-def _select_dynamic_split(doc_area_mapping, num_validation_samples, areas):
-    """Select validation samples with proportional distribution across areas."""
-    # Calculate proportional distribution
-    total_docs = sum(len(docs) for docs in doc_area_mapping)
-    distribution_ratios = [len(docs) / total_docs for docs in doc_area_mapping]
-    
-    print(f"📊 Proportional distribution ratios:")
-    for i, ratio in enumerate(distribution_ratios):
-        print(f"   Area {i+1}: {ratio:.3f} ({len(doc_area_mapping[i])} samples)")
-    
-    val_docs = []
-    area_allocations = []
-    
-    # Calculate target samples per area
-    target_samples_per_area = [int(num_validation_samples * ratio) for ratio in distribution_ratios]
-    remaining_samples = num_validation_samples - sum(target_samples_per_area)
-    
-    # Distribute remaining samples to areas with highest ratios
-    if remaining_samples > 0:
-        sorted_areas = sorted(enumerate(distribution_ratios), key=lambda x: x[1], reverse=True)
-        for i in range(remaining_samples):
-            area_idx = sorted_areas[i % len(sorted_areas)][0]
-            target_samples_per_area[area_idx] += 1
-    
-    print(f"📊 Target samples per area:")
-    for i, target in enumerate(target_samples_per_area):
-        print(f"   Area {i+1}: {target} samples")
-    
-    # Select samples from each area
-    for i, (docs, target) in enumerate(zip(doc_area_mapping, target_samples_per_area)):
-        # Apply 50% rule for small areas
-        if len(docs) < target:
-            if len(docs) <= target:  # Small area: use only 50% for validation
-                samples_from_area = max(1, len(docs) // 2)
-                print(f"⚠️  Area {i+1}: Only {len(docs)} samples available (requested {target}) - using 50% rule: {samples_from_area} samples")
-            else:
-                samples_from_area = len(docs)
-                print(f"⚠️  Area {i+1}: Only {len(docs)} samples available (requested {target}) - using all available")
-        else:
-            samples_from_area = target
-        
-        if samples_from_area > 0:
-            np.random.shuffle(docs)
-            selected_docs = docs[:samples_from_area]
-            val_docs.extend(selected_docs)
-            area_allocations.append(samples_from_area)
-        else:
-            area_allocations.append(0)
-    
-    # Redistribute remaining samples if needed
-    if len(val_docs) < num_validation_samples:
-        needed_samples = num_validation_samples - len(val_docs)
-        print(f"📊 Need {needed_samples} more samples, redistributing...")
-        
-        for i, (docs, ratio) in enumerate(zip(doc_area_mapping, distribution_ratios)):
-            additional_samples = int(needed_samples * ratio)
-            if additional_samples > 0:
-                remaining_docs = [doc for doc in docs if doc not in val_docs]
-                if len(remaining_docs) > 0:
-                    # For small areas, limit additional samples to maintain 50% rule
-                    # Use the original target for this area
-                    original_target = target_samples_per_area[i]
-                    if len(docs) <= original_target:
-                        max_additional = max(0, len(docs) // 2 - area_allocations[i])
-                        additional_samples = min(additional_samples, max_additional)
-                    
-                    if additional_samples > 0:
-                        np.random.shuffle(remaining_docs)
-                        selected_docs = remaining_docs[:min(additional_samples, len(remaining_docs))]
-                        val_docs.extend(selected_docs)
-                        area_allocations[i] += len(selected_docs)
-    
-    return val_docs, area_allocations
 
 
 def load_raw_documents(train_collection='validation_collection', target_lesion='calcification'):

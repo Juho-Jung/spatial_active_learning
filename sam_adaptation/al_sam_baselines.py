@@ -72,16 +72,14 @@ def _parse_arguments():
     parser.add_argument('--min_delta', type=float, default=0.001, help='Early stopping minimum delta')
     parser.add_argument('--validate_data_mode', default='spatial_equal_split',
                         choices=['random_split', 'spatial_equal_split', 'spatial_dynamic_split'],
-                        help='Validation data split mode: random_split (simple random), spatial_equal_split (equal per area), spatial_dynamic_split (proportional per area)')
+                        help='Validation data split mode: random_split (20/80 ratio), spatial_equal_split (equal per grid), spatial_dynamic_split (proportional per grid)')
     parser.add_argument('--collection', default='sdc_ppm_train-0908',
                         choices=['validation_collection', 'train_collection', 'sdc_ppm_train-0908'],
                         help='Data collection to use: validation_collection or train_collection or sdc_ppm_train-0908')
     parser.add_argument('--num_validation_samples', type=int, default=None,
                         help='Number of validation samples to use (default: use all)')
-    parser.add_argument('--grid_width', type=int, default=5, help='Spatial grid width (number of columns)')
-    parser.add_argument('--grid_height', type=int, default=5, help='Spatial grid height (number of rows)')
-    parser.add_argument('--lambda1', type=float, default=1.0,
-                        help='Weight for spatial coverage term in adaptive selection')
+    parser.add_argument('--grid_width', type=int, default=3, help='Spatial grid width (number of columns)')
+    parser.add_argument('--grid_height', type=int, default=4, help='Spatial grid height (number of rows)')
     return parser.parse_args()
 
 
@@ -120,7 +118,6 @@ def _log_experiment_start(logger, args, output_dir):
     logger.info(f"Validation data mode: {args.validate_data_mode}")
     logger.info(f"Data collection: {args.collection}")
     logger.info(f"Validation samples limit: {args.num_validation_samples if args.num_validation_samples else 'All'}")
-    logger.info(f"Grid dimensions: {args.grid_width}x{args.grid_height}")
     logger.info(f"Output directory: {output_dir}")
 
 
@@ -131,7 +128,7 @@ def _create_datasets(args):
     elif args.validate_data_mode in ['spatial_equal_split', 'spatial_dynamic_split']:
         full_dataset, val_dataset = _create_spatial_split_datasets(args)
     else:
-        raise ValueError(f"Unknown validate_data_mode: {args.validate_data_mode}")
+        raise ValueError(f"Unknown validation mode: {args.validate_data_mode}")
 
     return full_dataset, val_dataset
 
@@ -151,9 +148,7 @@ def _create_spatial_split_datasets(args):
         areas=areas,
         seed=42,
         num_validation_samples=args.num_validation_samples,
-        grid_width=args.grid_width,
-        grid_height=args.grid_height,
-        split_mode=args.validate_data_mode
+        validation_mode=args.validate_data_mode
     )
 
     print("📊 Creating datasets from spatial split...")
@@ -430,7 +425,6 @@ def main():
     print(f"🎯 Starting Active Learning with {args.mode} strategy...")
     print(f"📊 Total pool size: {len(pool_indices)}")
     print(f"📊 Validation set size: {len(val_dataset)} (original: {original_val_size})")
-    print(f"📊 Grid dimensions: {args.grid_width}x{args.grid_height} ({args.grid_width * args.grid_height} areas)")
     if args.num_validation_samples is not None:
         print(f"📊 Validation samples limited to: {args.num_validation_samples}")
 

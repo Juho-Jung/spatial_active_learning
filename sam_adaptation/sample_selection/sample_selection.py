@@ -218,7 +218,8 @@ def select_samples_adaptive(pool_indices, uncertainties, num_samples, selected_i
     if np.allclose(available_lesionness, 1.0):
         weights = pixel_entropy
     else:
-        weights = available_lesionness * pixel_entropy
+        # Apply stronger lesionness weighting for better lesion detection
+        weights = (available_lesionness ** 1.5) * pixel_entropy
 
     # Calculate spatial histogram h_k(x) for each sample
     K = int(np.max(bin_id)) + 1  # Number of bins (should be 6 for 3x2 grid)
@@ -234,9 +235,9 @@ def select_samples_adaptive(pool_indices, uncertainties, num_samples, selected_i
     selected = []
     H_k = np.zeros(K)  # Cumulative coverage for each bin
 
-    # Define concave function phi(u) = sqrt(u)
+    # Define concave function phi(u) = log(1 + u) for better spatial coverage
     def phi(u):
-        return np.sqrt(np.maximum(u, 0))  # Ensure non-negative
+        return np.log(1 + np.maximum(u, 0))  # Ensure non-negative
 
     for _ in range(min(num_samples, len(available_indices))):
         best_score = -np.inf
@@ -252,8 +253,10 @@ def select_samples_adaptive(pool_indices, uncertainties, num_samples, selected_i
                 delta_spatial += phi(H_k[k] + h_histograms[i, k]) - phi(H_k[k])
 
             # Calculate final score: U(x) + lambda1 * Delta_spatial(x|S)
+            # Increase lambda1 for better spatial coverage
             uncertainty_score = uncertainties[idx]
-            score = uncertainty_score + lambda1 * delta_spatial
+            enhanced_lambda1 = lambda1 * 2.0  # Double the spatial coverage weight
+            score = uncertainty_score + enhanced_lambda1 * delta_spatial
 
             if score > best_score:
                 best_score = score

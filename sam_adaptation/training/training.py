@@ -6,20 +6,21 @@ This module contains training-related functions including model training,
 early stopping, and logging utilities.
 """
 
-import os
 import logging
+import os
+
+from losses import combo_loss
+from metrics import (calculate_bin_dice_metrics, calculate_metrics, calculate_performance_coverage,
+                     calculate_spatial_consistency, divide_image_into_areas)
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from metrics import calculate_metrics, divide_image_into_areas, calculate_bin_dice_metrics, calculate_performance_coverage, calculate_spatial_consistency
-from losses import combo_loss
-
 
 def train_model_round(model, train_dataset, val_dataset, device, epochs=50, batch_size=8,
-                     round_num=1, output_dir=None, patience=15, min_delta=0.001, prev_bin_dices=None, 
-                     grid_width=2, grid_height=3):
+                      round_num=1, output_dir=None, patience=15, min_delta=0.001, prev_bin_dices=None,
+                      grid_width=2, grid_height=3):
     """
     Train model for one round with early stopping.
 
@@ -112,7 +113,7 @@ def _setup_round_logger(output_dir, round_num, train_dataset, val_dataset, epoch
 
 
 def _train_with_early_stopping(model, train_loader, val_loader, optimizer, scheduler, criterion,
-                              areas, device, epochs, patience, min_delta, prev_bin_dices, round_logger):
+                               areas, device, epochs, patience, min_delta, prev_bin_dices, round_logger):
     """Train model with early stopping."""
     best_val_loss = float('inf')
     best_model_state = None
@@ -149,7 +150,7 @@ def _train_with_early_stopping(model, train_loader, val_loader, optimizer, sched
 
         # Log epoch metrics
         _log_epoch_metrics(round_logger, epoch, epochs, train_loss, val_loss, train_dice, val_dice,
-                          best_val_loss, best_epoch, patience_counter, patience, scheduler, val_bin_metrics)
+                           best_val_loss, best_epoch, patience_counter, patience, scheduler, val_bin_metrics)
 
         # Update progress bar
         epoch_pbar.set_postfix({
@@ -200,7 +201,6 @@ def _train_epoch(model, train_loader, optimizer, scheduler, criterion, device):
         train_loss += loss.item()
         dice, _, _, _ = calculate_metrics(outputs, masks)
         train_dice += dice
-
 
     return train_loss / len(train_loader), train_dice / len(train_loader)
 
@@ -284,7 +284,8 @@ def _calculate_performance_coverage(prev_bin_dices, current_batch_bin_dices, are
         # Create small baseline tensor with same shape as current_bin_dices
         prev_bin_dices = torch.full_like(current_bin_dices, 0.001)
 
-        print(f"🔍 First round performance coverage: comparing with 0.001 baseline ({num_areas} areas, {num_samples} samples)")
+        print(
+            f"🔍 First round performance coverage: comparing with 0.001 baseline ({num_areas} areas, {num_samples} samples)")
         return calculate_performance_coverage(prev_bin_dices, current_bin_dices, areas, debug=True)
 
     # Check if tensor sizes match
@@ -304,7 +305,7 @@ def _calculate_performance_coverage(prev_bin_dices, current_batch_bin_dices, are
 
 
 def _log_epoch_metrics(round_logger, epoch, epochs, train_loss, val_loss, train_dice, val_dice,
-                      best_val_loss, best_epoch, patience_counter, patience, scheduler, val_bin_metrics):
+                       best_val_loss, best_epoch, patience_counter, patience, scheduler, val_bin_metrics):
     """Log metrics for current epoch."""
     if not round_logger:
         return
@@ -322,7 +323,8 @@ def _log_epoch_metrics(round_logger, epoch, epochs, train_loss, val_loss, train_
     round_logger.info(f"    Worst Bin Dice: {val_bin_metrics['worst_bin_dice']:.6f}")
     round_logger.info(f"    P10 Bin Dice: {val_bin_metrics['p10_bin_dice']:.6f}")
     round_logger.info(f"    Bin Std: {val_bin_metrics['bin_std']:.6f}")
-    round_logger.info(f"    Min/Max Bin Dice: {val_bin_metrics['min_bin_dice']:.6f}/{val_bin_metrics['max_bin_dice']:.6f}")
+    round_logger.info(
+        f"    Min/Max Bin Dice: {val_bin_metrics['min_bin_dice']:.6f}/{val_bin_metrics['max_bin_dice']:.6f}")
     round_logger.info(f"    Median Bin Dice: {val_bin_metrics['median_bin_dice']:.6f}")
     round_logger.info(f"    Spatial Consistency: {val_bin_metrics['spatial_consistency']:.6f}")
     round_logger.info(f"    Performance Coverage: {val_bin_metrics['performance_coverage']:.6f}")
