@@ -1,1 +1,4 @@
 sam_vit_b.pth
+*.log
+*.pyc
+__pycache__
