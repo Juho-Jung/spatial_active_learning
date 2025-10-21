@@ -2,3 +2,14 @@ sam_vit_b.pth
 *.log
 *.pyc
 __pycache__
+*.pth
+*.pt
+*.pkl
+*.json
+*.csv
+*.txt
+*.png
+*.jpg
+*.jpeg
+*.tiff
+*.xlsx

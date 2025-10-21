@@ -1,13 +1,18 @@
-#!/usr/bin/env python3
 """
-Sample selection strategies for active learning.
+Sample selection strategies for Active Learning.
 
-This module contains various sample selection strategies used in active learning
-experiments, including random, uncertainty-based, and area-based selection methods.
+This module provides clean, well-organized sample selection strategies
+with proper logging and error handling, following the original sam_adaptation approach.
 """
+
+import logging
+from typing import Any, Dict, List
 
 import numpy as np
 import torch
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 def create_spatial_bins(height, width, grid_width=2, grid_height=3):
@@ -182,9 +187,9 @@ def select_samples_adaptive(pool_indices, uncertainties, num_samples, selected_i
 
     # If required tensors are not provided, fall back to uncertainty selection
     if probs is None or lesionness is None or bin_id is None:
-        print(f"⚠️ Adaptive selection: Missing required data (probs={probs is not None}, "
-              f"lesionness={lesionness is not None}, bin_id={bin_id is not None}). "
-              f"Falling back to uncertainty selection.")
+        logger.warning(f"Adaptive selection: Missing required data (probs={probs is not None}, "
+                       f"lesionness={lesionness is not None}, bin_id={bin_id is not None}). "
+                       f"Falling back to uncertainty selection.")
         return select_samples_uncertainty(pool_indices, uncertainties, num_samples, selected_indices, seed)
 
     # Convert to numpy if needed
@@ -304,8 +309,8 @@ def select_samples_adaptive_improved(pool_indices, uncertainties, num_samples, s
 
     # If required tensors are not provided, fall back to uncertainty selection
     if probs is None or lesionness is None or bin_id is None:
-        print(f"⚠️ Improved adaptive selection: Missing required data. "
-              f"Falling back to uncertainty selection.")
+        logger.warning(f"Improved adaptive selection: Missing required data. "
+                       f"Falling back to uncertainty selection.")
         return select_samples_uncertainty(pool_indices, uncertainties, num_samples, selected_indices, seed)
 
     # Convert to numpy if needed
@@ -395,274 +400,6 @@ def select_samples_adaptive_improved(pool_indices, uncertainties, num_samples, s
             break
 
     return selected
-
-
-def select_samples_adaptive_enhanced(pool_indices, uncertainties, num_samples, selected_indices,
-                                     probs=None, lesionness=None, bin_id=None, lambda1=1.0, seed=None):
-    """
-    Enhanced adaptive selection strategy with improved hyperparameters.
-
-    Key improvements:
-    - Stronger spatial weight (2.0 → 8.0)
-    - Enhanced uncertainty weight (1.5 → 5.0)
-    - Extended lesionness power (1.5 → 6.5)
-    - Adaptive balance weighting
-    - Diversity consideration
-    """
-    available_indices = [idx for idx in pool_indices if idx not in selected_indices]
-    if len(available_indices) < num_samples:
-        return available_indices
-
-    # For first round (no uncertainties), use random selection
-    if uncertainties is None or len(uncertainties) == 0:
-        return select_samples_random(pool_indices, num_samples, selected_indices, seed)
-
-    # If required tensors are not provided, fall back to uncertainty selection
-    if probs is None or lesionness is None or bin_id is None:
-        print(f"⚠️ Enhanced adaptive selection: Missing required data. "
-              f"Falling back to uncertainty selection.")
-        return select_samples_uncertainty(pool_indices, uncertainties, num_samples, selected_indices, seed)
-
-    # Convert to numpy if needed
-    if torch.is_tensor(probs):
-        probs = probs.cpu().numpy()
-    if torch.is_tensor(lesionness):
-        lesionness = lesionness.cpu().numpy()
-    if torch.is_tensor(bin_id):
-        bin_id = bin_id.cpu().numpy()
-
-    # Extract data for available indices only
-    N = len(available_indices)
-    available_positions = [pool_indices.index(idx) for idx in available_indices]
-    available_probs = probs[available_positions]
-    available_lesionness = lesionness[available_positions]
-
-    # Calculate pixel entropy with better numerical stability
-    eps = 1e-8
-    p_safe = np.clip(available_probs, eps, 1 - eps)
-    pixel_entropy = -(p_safe * np.log(p_safe) + (1 - p_safe) * np.log(1 - p_safe))
-
-    # Enhanced lesionness weighting with extended adaptive power
-    if np.allclose(available_lesionness, 1.0):
-        weights = pixel_entropy
-    else:
-        # Extended adaptive lesionness power based on data distribution
-        lesionness_std = np.std(available_lesionness)
-        # Enhanced range: 1.5 → 6.5 (vs original 2.0 → 5.0)
-        lesionness_power = 1.5 + min(lesionness_std * 15, 5.0)
-        weights = (available_lesionness ** lesionness_power) * pixel_entropy
-
-    # Calculate spatial histogram
-    K = int(np.max(bin_id)) + 1
-    h_histograms = np.zeros((N, K))
-    for i, idx in enumerate(available_indices):
-        for k in range(K):
-            mask = (bin_id == k)
-            h_histograms[i, k] = np.sum(weights[i][mask])
-
-    # Enhanced adaptive lambda1 with stronger spatial emphasis
-    progress = len(selected_indices) / (len(selected_indices) + num_samples)
-
-    # Option 1: Linear increase (2.0 → 8.0)
-    adaptive_lambda1 = lambda1 * (2.0 + progress * 6.0)
-
-    # Enhanced uncertainty scaling with stronger emphasis
-    uncertainty_std = np.std(uncertainties)
-    # Enhanced range: 1.5 → 5.0 (vs original 1.0 → 3.0)
-    uncertainty_scale = 1.5 + progress * 3.5 + min(uncertainty_std * 5, 1.0)
-
-    # Adaptive balance weight for uncertainty-spatial balance
-    balance_weight = 1.0 + progress * 1.5  # 1.0 → 2.5
-
-    # Greedy selection with enhanced scoring
-    selected = []
-    H_k = np.zeros(K)
-
-    def phi(u):
-        return np.log(1 + np.maximum(u, 0))
-
-    for _ in range(min(num_samples, len(available_indices))):
-        best_score = -np.inf
-        best_idx = None
-
-        for i, idx in enumerate(available_indices):
-            if idx in selected:
-                continue
-
-            # Calculate spatial gain
-            delta_spatial = 0.0
-            for k in range(K):
-                delta_spatial += phi(H_k[k] + h_histograms[i, k]) - phi(H_k[k])
-
-            # Enhanced scoring with better balance
-            uncertainty_idx = pool_indices.index(idx)
-            uncertainty_score = uncertainties[uncertainty_idx]
-
-            # Apply enhanced uncertainty scaling
-            scaled_uncertainty = uncertainty_score * uncertainty_scale
-
-            # Apply balance weight to uncertainty
-            balanced_uncertainty = balance_weight * scaled_uncertainty
-
-            # Final score with enhanced weights
-            score = balanced_uncertainty + adaptive_lambda1 * delta_spatial
-
-            if score > best_score:
-                best_score = score
-                best_idx = (i, idx)
-
-        if best_idx is not None:
-            i, idx = best_idx
-            selected.append(idx)
-            H_k += h_histograms[i]
-        else:
-            # Fallback: select remaining samples randomly if no good candidates
-            remaining = [idx for idx in available_indices if idx not in selected]
-            if remaining:
-                selected.extend(remaining[:num_samples - len(selected)])
-            break
-
-    return selected
-
-
-def select_samples_adaptive_aggressive(pool_indices, uncertainties, num_samples, selected_indices,
-                                       probs=None, lesionness=None, bin_id=None, lambda1=1.0, seed=None):
-    """
-    Aggressive adaptive selection strategy for maximum performance coverage.
-
-    Key features:
-    - Very strong spatial weight (3.0 → 10.0)
-    - Maximum uncertainty weight (2.0 → 6.0)
-    - Extended lesionness power (2.0 → 8.0)
-    - Diversity bonus
-    """
-    available_indices = [idx for idx in pool_indices if idx not in selected_indices]
-    if len(available_indices) < num_samples:
-        return available_indices
-
-    # For first round (no uncertainties), use random selection
-    if uncertainties is None or len(uncertainties) == 0:
-        return select_samples_random(pool_indices, num_samples, selected_indices, seed)
-
-    # If required tensors are not provided, fall back to uncertainty selection
-    if probs is None or lesionness is None or bin_id is None:
-        print(f"⚠️ Aggressive adaptive selection: Missing required data. "
-              f"Falling back to uncertainty selection.")
-        return select_samples_uncertainty(pool_indices, uncertainties, num_samples, selected_indices, seed)
-
-    # Convert to numpy if needed
-    if torch.is_tensor(probs):
-        probs = probs.cpu().numpy()
-    if torch.is_tensor(lesionness):
-        lesionness = lesionness.cpu().numpy()
-    if torch.is_tensor(bin_id):
-        bin_id = bin_id.cpu().numpy()
-
-    # Extract data for available indices only
-    N = len(available_indices)
-    available_positions = [pool_indices.index(idx) for idx in available_indices]
-    available_probs = probs[available_positions]
-    available_lesionness = lesionness[available_positions]
-
-    # Calculate pixel entropy with better numerical stability
-    eps = 1e-8
-    p_safe = np.clip(available_probs, eps, 1 - eps)
-    pixel_entropy = -(p_safe * np.log(p_safe) + (1 - p_safe) * np.log(1 - p_safe))
-
-    # Aggressive lesionness weighting
-    if np.allclose(available_lesionness, 1.0):
-        weights = pixel_entropy
-    else:
-        lesionness_std = np.std(available_lesionness)
-        # Aggressive range: 2.0 → 8.0
-        lesionness_power = 2.0 + min(lesionness_std * 20, 6.0)
-        weights = (available_lesionness ** lesionness_power) * pixel_entropy
-
-    # Calculate spatial histogram
-    K = int(np.max(bin_id)) + 1
-    h_histograms = np.zeros((N, K))
-    for i, idx in enumerate(available_indices):
-        for k in range(K):
-            mask = (bin_id == k)
-            h_histograms[i, k] = np.sum(weights[i][mask])
-
-    # Aggressive adaptive lambda1
-    progress = len(selected_indices) / (len(selected_indices) + num_samples)
-    adaptive_lambda1 = lambda1 * (3.0 + progress * 7.0)  # 3.0 → 10.0
-
-    # Aggressive uncertainty scaling
-    uncertainty_std = np.std(uncertainties)
-    uncertainty_scale = 2.0 + progress * 4.0 + min(uncertainty_std * 8, 2.0)  # 2.0 → 6.0
-
-    # Diversity bonus
-    diversity_bonus = 1.0 + progress * 2.0  # 1.0 → 3.0
-
-    # Greedy selection with aggressive scoring
-    selected = []
-    H_k = np.zeros(K)
-
-    def phi(u):
-        return np.log(1 + np.maximum(u, 0))
-
-    for _ in range(min(num_samples, len(available_indices))):
-        best_score = -np.inf
-        best_idx = None
-
-        for i, idx in enumerate(available_indices):
-            if idx in selected:
-                continue
-
-            # Calculate spatial gain
-            delta_spatial = 0.0
-            for k in range(K):
-                delta_spatial += phi(H_k[k] + h_histograms[i, k]) - phi(H_k[k])
-
-            # Enhanced scoring
-            uncertainty_idx = pool_indices.index(idx)
-            uncertainty_score = uncertainties[uncertainty_idx]
-            scaled_uncertainty = uncertainty_score * uncertainty_scale
-
-            # Diversity bonus for underrepresented regions
-            diversity_gain = calculate_diversity_gain(H_k, h_histograms[i])
-
-            # Final score with aggressive weights
-            score = scaled_uncertainty + adaptive_lambda1 * delta_spatial + diversity_bonus * diversity_gain
-
-            if score > best_score:
-                best_score = score
-                best_idx = (i, idx)
-
-        if best_idx is not None:
-            i, idx = best_idx
-            selected.append(idx)
-            H_k += h_histograms[i]
-        else:
-            remaining = [idx for idx in available_indices if idx not in selected]
-            if remaining:
-                selected.extend(remaining[:num_samples - len(selected)])
-            break
-
-    return selected
-
-
-def calculate_diversity_gain(H_k, h_histogram):
-    """Calculate diversity gain for spatial regions."""
-    # Regions with lower coverage get higher diversity gain
-    total_coverage = np.sum(H_k)
-    if total_coverage == 0:
-        return 1.0
-
-    # Calculate coverage per region
-    coverage_per_region = H_k / (total_coverage + 1e-8)
-
-    # Diversity gain is higher for underrepresented regions
-    diversity_gain = 0.0
-    for k in range(len(h_histogram)):
-        if h_histogram[k] > 0:  # This sample contributes to region k
-            # Higher gain for underrepresented regions
-            diversity_gain += h_histogram[k] * (1.0 - coverage_per_region[k])
-
-    return diversity_gain
 
 
 def select_samples_diversity(pool_indices, uncertainties, num_samples, selected_indices, areas, features=None, seed=None):
@@ -842,8 +579,6 @@ SELECTION_STRATEGIES = {
     'uncertainty_area': select_samples_uncertainty_area,
     'adaptive': select_samples_adaptive,
     'adaptive_improved': select_samples_adaptive_improved,
-    'adaptive_enhanced': select_samples_adaptive_enhanced,
-    'adaptive_aggressive': select_samples_adaptive_aggressive,
     'diversity': select_samples_diversity,
     'diversity_uncertainty': select_samples_diversity_uncertainty,
 }
@@ -855,3 +590,32 @@ def get_selection_strategy(strategy_name):
         raise ValueError(f"Unknown selection strategy: {strategy_name}. "
                          f"Available strategies: {list(SELECTION_STRATEGIES.keys())}")
     return SELECTION_STRATEGIES[strategy_name]
+
+
+def select_samples(documents: List[Dict], strategy: str, num_samples: int, finding_name: str = 'calcifiednodule', **kwargs) -> List[Dict]:
+    """
+    Main function to select samples using specified strategy.
+
+    This is a simplified interface for backward compatibility.
+    Note: This function is kept for compatibility but the main strategies
+    should be used directly with pool_indices format.
+    """
+    logger.warning("Using simplified select_samples interface. Consider using direct strategy functions.")
+
+    # Convert documents to indices for compatibility
+    pool_indices = list(range(len(documents)))
+    selected_indices = []
+
+    # Get the strategy function
+    strategy_func = get_selection_strategy(strategy)
+
+    # Call the strategy function
+    if strategy in ['adaptive', 'adaptive_improved']:
+        # These strategies need additional parameters
+        return strategy_func(pool_indices, None, num_samples, selected_indices, **kwargs)
+    elif strategy in ['diversity', 'diversity_uncertainty']:
+        # These strategies need features parameter
+        return strategy_func(pool_indices, None, num_samples, selected_indices, None, **kwargs)
+    else:
+        # Standard strategies
+        return strategy_func(pool_indices, None, num_samples, selected_indices, **kwargs)

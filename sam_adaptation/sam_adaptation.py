@@ -14,17 +14,17 @@ from datetime import datetime
 
 import torch
 import torch.optim as optim
-from torch.utils.data import DataLoader, WeightedRandomSampler
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data.distributed import DistributedSampler
-from tqdm import tqdm
-
 # Import our modular components
-from base_utils import set_seed, setup_logger, setup_ddp, cleanup_ddp, create_session_dir
-from models import SAMLesionModel
+from base_utils import (cleanup_ddp, create_session_dir, set_seed, setup_ddp,
+                        setup_logger)
 from dataset import SAMLesionDataset
 from losses import combo_loss
 from metrics import calculate_metrics
+from models import SAMLesionModel
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data.distributed import DistributedSampler
+from tqdm import tqdm
 
 # Suppress albumentations warnings
 os.environ['NO_ALBUMENTATIONS_UPDATE'] = '1'
@@ -61,9 +61,9 @@ def train_model(sam_checkpoint_path: str, batch_size: int = 4, gpu_id: int = 0,
 
         # Setup logger
         logger = setup_logger(session_dir, rank)
-        logger.info("="*80)
+        logger.info("=" * 80)
         logger.info("SAM Lesion Segmentation Training Started")
-        logger.info("="*80)
+        logger.info("=" * 80)
         logger.info(f"Target lesion: {target_lesion}")
         logger.info(f"Train collection: {train_collection}")
         logger.info(f"Epochs: {epochs}")
@@ -80,8 +80,10 @@ def train_model(sam_checkpoint_path: str, batch_size: int = 4, gpu_id: int = 0,
     best_model_path = os.path.join(session_dir, f"best_model.pth")
 
     # Create datasets
-    train_dataset = SAMLesionDataset(split='train', train_collection=train_collection, limit=data_limit, target_lesion=target_lesion)
-    val_dataset = SAMLesionDataset(split='val', train_collection=train_collection, limit=data_limit, target_lesion=target_lesion)
+    train_dataset = SAMLesionDataset(split='train', train_collection=train_collection,
+                                     limit=data_limit, target_lesion=target_lesion)
+    val_dataset = SAMLesionDataset(split='val', train_collection=train_collection,
+                                   limit=data_limit, target_lesion=target_lesion)
 
     # Create data loaders with DDP support
     if is_ddp:
@@ -174,7 +176,7 @@ def train_model(sam_checkpoint_path: str, batch_size: int = 4, gpu_id: int = 0,
         logger.info(f"Training samples: {len(train_dataset)}")
         logger.info(f"Validation samples: {len(val_dataset)}")
         logger.info(f"Steps per epoch: {len(train_loader)}")
-        logger.info("-"*80)
+        logger.info("-" * 80)
 
     for epoch in range(epochs):
         # Training
@@ -282,8 +284,8 @@ def train_model(sam_checkpoint_path: str, batch_size: int = 4, gpu_id: int = 0,
             metrics_tensor /= world_size
 
             avg_train_loss, avg_val_loss, avg_train_dice, avg_val_dice, \
-            avg_train_iou, avg_val_iou, avg_train_lesion_sens, avg_val_lesion_sens, \
-            avg_train_auroc, avg_val_auroc = metrics_tensor.cpu().numpy()
+                avg_train_iou, avg_val_iou, avg_train_lesion_sens, avg_val_lesion_sens, \
+                avg_train_auroc, avg_val_auroc = metrics_tensor.cpu().numpy()
 
         # Save epoch metrics
         epoch_metrics = {
@@ -320,9 +322,11 @@ def train_model(sam_checkpoint_path: str, batch_size: int = 4, gpu_id: int = 0,
                     logger.info(f"New best model saved! Val Loss: {best_val_loss:.4f} (Epoch {best_epoch})")
             else:
                 early_stopping_counter += 1
-                print(f'⏳ No improvement for {early_stopping_counter} epochs (best: {best_val_loss:.4f} at epoch {best_epoch})')
+                print(
+                    f'⏳ No improvement for {early_stopping_counter} epochs (best: {best_val_loss:.4f} at epoch {best_epoch})')
                 if logger:
-                    logger.info(f"No improvement for {early_stopping_counter} epochs (best: {best_val_loss:.4f} at epoch {best_epoch})")
+                    logger.info(
+                        f"No improvement for {early_stopping_counter} epochs (best: {best_val_loss:.4f} at epoch {best_epoch})")
 
                 # Check for early stopping
                 if early_stopping_counter >= patience:
@@ -360,7 +364,8 @@ def train_model(sam_checkpoint_path: str, batch_size: int = 4, gpu_id: int = 0,
             print(f'Epoch {epoch + 1}: Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}')
             print(f'          Train Dice: {avg_train_dice:.4f}, Val Dice: {avg_val_dice:.4f}')
             print(f'          Train IoU: {avg_train_iou:.4f}, Val IoU: {avg_val_iou:.4f}')
-            print(f'          Train Lesion Sens: {avg_train_lesion_sens:.4f}, Val Lesion Sens: {avg_val_lesion_sens:.4f}')
+            print(
+                f'          Train Lesion Sens: {avg_train_lesion_sens:.4f}, Val Lesion Sens: {avg_val_lesion_sens:.4f}')
             print(f'          Train AUROC: {avg_train_auroc:.4f}, Val AUROC: {avg_val_auroc:.4f}')
             print(f'          Learning Rate: {scheduler.get_last_lr()[0]:.6f}')
             print("=" * 80)
@@ -371,7 +376,8 @@ def train_model(sam_checkpoint_path: str, batch_size: int = 4, gpu_id: int = 0,
                 logger.info(f"  Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
                 logger.info(f"  Train Dice: {avg_train_dice:.4f}, Val Dice: {avg_val_dice:.4f}")
                 logger.info(f"  Train IoU: {avg_train_iou:.4f}, Val IoU: {avg_val_iou:.4f}")
-                logger.info(f"  Train Lesion Sens: {avg_train_lesion_sens:.4f}, Val Lesion Sens: {avg_val_lesion_sens:.4f}")
+                logger.info(
+                    f"  Train Lesion Sens: {avg_train_lesion_sens:.4f}, Val Lesion Sens: {avg_val_lesion_sens:.4f}")
                 logger.info(f"  Train AUROC: {avg_train_auroc:.4f}, Val AUROC: {avg_val_auroc:.4f}")
                 logger.info(f"  Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
                 logger.info("-" * 80)
@@ -389,9 +395,9 @@ def train_model(sam_checkpoint_path: str, batch_size: int = 4, gpu_id: int = 0,
 
         # Final logging
         if logger:
-            logger.info("="*80)
+            logger.info("=" * 80)
             logger.info("Training Completed!")
-            logger.info("="*80)
+            logger.info("=" * 80)
             logger.info(f"Best validation Loss: {best_val_loss:.4f} at epoch {best_epoch}")
             logger.info(f"Best model saved: {best_model_path}")
             logger.info(f"Session directory: {session_dir}")
@@ -399,7 +405,7 @@ def train_model(sam_checkpoint_path: str, batch_size: int = 4, gpu_id: int = 0,
                 logger.warning(f"Training stopped early due to no improvement for {patience} epochs")
             else:
                 logger.info(f"Training completed all {epochs} epochs")
-            logger.info("="*80)
+            logger.info("=" * 80)
 
     # Cleanup DDP
     cleanup_ddp()
@@ -408,19 +414,20 @@ def train_model(sam_checkpoint_path: str, batch_size: int = 4, gpu_id: int = 0,
 def main():
     parser = argparse.ArgumentParser(description='SAM Adaptation for Lesion Segmentation')
     parser.add_argument('--sam_checkpoint', default="/opt/pxi/projects/calcified_nodule/spatial_active_learning/sam_vit_b.pth",
-                       help='SAM checkpoint path')
+                        help='SAM checkpoint path')
     parser.add_argument('--vit_model', default='vit_b', choices=['vit_b', 'vit_l', 'vit_h'],
-                       help='SAM ViT model size')
+                        help='SAM ViT model size')
     parser.add_argument('--batch_size', type=int, default=8, help='Batch size')
     parser.add_argument('--gpu_id', type=int, default=0, help='GPU ID')
     parser.add_argument('--train_collection', default='validation_collection',
-                       choices=['validation_collection', 'train_collection_with_consensus', 'both'],
-                       help='Training data collection')
+                        choices=['validation_collection', 'train_collection_with_consensus', 'both'],
+                        help='Training data collection')
     parser.add_argument('--epochs', type=int, default=200, help='Number of epochs')
-    parser.add_argument('--data_limit', type=int, default=None, help='Limit number of training samples (for few-shot experiments)')
+    parser.add_argument('--data_limit', type=int, default=None,
+                        help='Limit number of training samples (for few-shot experiments)')
     parser.add_argument('--target_lesion', default='calcification',
-                       choices=['calcification', 'nodule', 'pneumonia'],
-                       help='Target lesion type to segment')
+                        choices=['calcification', 'nodule', 'pneumonia'],
+                        help='Target lesion type to segment')
     parser.add_argument('--patience', type=int, default=15, help='Early stopping patience (epochs)')
     parser.add_argument('--min_delta', type=float, default=0.001, help='Minimum change to qualify as improvement')
 

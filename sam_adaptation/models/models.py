@@ -134,7 +134,6 @@ class SAMLesionModel(nn.Module):
                 return mask
 
 
-
 class MCDropoutDecoder(nn.Module):
     """MC Dropout version of LesionDecoder for uncertainty estimation."""
 
@@ -214,3 +213,85 @@ class MCDropoutSAMModel(nn.Module):
         mask = torch.nn.functional.interpolate(mask, size=(512, 512), mode='bilinear', align_corners=False)
 
         return mask
+
+
+class SegmentationModel(nn.Module):
+    """General segmentation model that can replace SAMLesionModel."""
+
+    def __init__(self, model_type: str = 'smp_efficientnet', device: str = 'cuda'):
+        super().__init__()
+
+        self.model_type = model_type
+        self.device = device
+
+        if model_type == 'swinunetr':
+            from monai.networks.nets import SwinUNETR
+            self.model = SwinUNETR(img_size=(512, 512), in_channels=3, out_channels=1, feature_size=96,
+                                   use_checkpoint=True, spatial_dims=2, use_v2=True).to(device)
+            # Add Sigmoid to ensure output is in [0,1] range
+            self.model = nn.Sequential(self.model, nn.Sigmoid()).to(device)
+        elif model_type == 'smp':
+            import segmentation_models_pytorch as smp
+            self.model = smp.Unet(
+                encoder_name='resnet50',
+                encoder_weights='imagenet',
+                decoder_attention_type='scse',
+                in_channels=3,
+                classes=1,
+                activation='sigmoid'
+            ).to(device)
+        elif model_type == 'smp_efficientnet':
+            import segmentation_models_pytorch as smp
+            self.model = smp.Unet(
+                encoder_name='efficientnet-b4',
+                encoder_weights='imagenet',
+                decoder_attention_type='scse',
+                in_channels=3,
+                classes=1,
+                activation='sigmoid'
+            ).to(device)
+        else:
+            raise ValueError(f"Unknown model: {model_type}. Choose from: swinunetr, smp, smp_efficientnet")
+
+    def forward(self, x, return_sam_prediction=False, return_features=False):
+        """
+        Forward pass with same interface as SAMLesionModel.
+
+        Args:
+            x: Input tensor [B, 3, 512, 512]
+            return_sam_prediction: For compatibility (ignored)
+            return_features: Whether to return features
+
+        Returns:
+            mask: Segmentation mask [B, 1, 512, 512]
+            features: Optional features [B, feature_dim] if return_features=True
+        """
+        # x: [B, 3, 512, 512] - input image
+
+        # Get segmentation mask
+        mask = self.model(x)  # [B, 1, 512, 512]
+
+        if return_features:
+            # For compatibility, extract features from the model
+            # This is a simple approach - you might want to modify based on your needs
+            if hasattr(self.model, 'encoder'):
+                # For SMP models, extract encoder features
+                features = self.model.encoder(x)
+                # Global average pooling
+                features = torch.mean(features, dim=(2, 3))  # [B, feature_dim]
+            else:
+                # For other models, use a simple feature extraction
+                with torch.no_grad():
+                    # Use the last layer before sigmoid as features
+                    if isinstance(self.model, nn.Sequential):
+                        # For SwinUNETR with sigmoid wrapper
+                        features = self.model[0](x)
+                        features = torch.mean(features, dim=(2, 3))  # [B, feature_dim]
+                    else:
+                        # For other models, create dummy features
+                        batch_size = x.shape[0]
+                        features = torch.zeros(batch_size, 256, device=x.device)
+
+            return mask, features
+        else:
+            return mask

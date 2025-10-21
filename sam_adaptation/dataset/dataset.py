@@ -5,18 +5,17 @@ Dataset classes for SAM adaptation project.
 
 import json
 import os
-from pathlib import Path
 # Add project root to path
 import sys
+from pathlib import Path
 
 import albumentations as A
-import numpy as np
-import torch
-from torch.utils.data import Dataset
-
 import mdb.document as mdb_d
 import mdb.load as mdb_c
+import numpy as np
+import torch
 import utils.image_io as image_io
+from torch.utils.data import Dataset
 
 sys.path.append('/opt/pxi')
 
@@ -88,18 +87,143 @@ class SAMLesionDataset(Dataset):
         collection = mdb_c.get_collection("train", db_names=['cxr_new', 'projects', 'public'])
 
         # Query for documents with target lesion findings
-        query = {
-            'labeled_findings': {'$all': [self.target_lesion]},
-            'objects.finding_name': {'$in': [self.target_lesion]}
-        }
+        if self.target_lesion == 'calcification' or self.target_lesion == 'calcifiednodule':
+            query = {
+                'labeled_findings': {'$all': ['calcification']},
+                'objects.finding_name': {'$in': ['calcification']}}
+        else:
+            query = {
+                'labeled_findings': {'$all': [self.target_lesion]},
+                'objects.finding_name': {'$in': [self.target_lesion]}}
 
         excluded_sources = ["amcio_b1_368"]
         query['data_source'] = {'$nin': excluded_sources}
 
         documents = list(collection.find(query).sort('_id', 1))  # Sort by _id for consistent ordering
 
-        print(f"📊 Train Collection: {len(documents)} -> {len(documents)} (after filtering)")
-        return documents
+        # Load converted MDB data for consensus annotations: 1st round
+        converted_data_path_first_round = "/opt/pxi/projects/calcified_nodule/relabeling_update/calcifiednodule/converted_mdb_data_calcifiednodule_1st_round.json"
+        if not os.path.exists(converted_data_path_first_round):
+            print(
+                f"   Warning: converted_mdb_data_calcifiednodule_1st_round.json not found at {converted_data_path_first_round}")
+            return []
+        with open(converted_data_path_first_round, 'r') as f:
+            converted_data_first_round = json.load(f)
+        print(f"   Loaded {len(converted_data_first_round)} entries from converted_mdb_data_calcifiednodule_1st_round.json")
+
+        # Load converted MDB data for consensus annotations: 2nd round
+        converted_data_path_second_round = "/opt/pxi/projects/calcified_nodule/relabeling_update/calcifiednodule/converted_mdb_data_calcifiednodule_2nd_round.json"
+        if not os.path.exists(converted_data_path_second_round):
+            print(
+                f"   Warning: converted_mdb_data_calcifiednodule_2nd_round.json not found at {converted_data_path_second_round}")
+            return []
+        with open(converted_data_path_second_round, 'r') as f:
+            converted_data_second_round = json.load(f)
+        print(f"   Loaded {len(converted_data_second_round)} entries from converted_mdb_data_calcifiednodule_2nd_round.json")
+
+        converted_data = {**converted_data_first_round, **converted_data_second_round}
+
+        # Create mapping from path_dicom stem to doc
+        doc_mapping = {}
+        for doc in documents:
+            if 'path_dicom' not in doc:
+                continue
+            try:
+                # Extract stem from path_dicom (e.g., "0064493-0000345" from "pxi-dataset/cxr/private/internal/210124_nipa/dicom/0064493-0000345.dcm")
+                path_dicom = doc['path_dicom']
+                stem = Path(path_dicom).stem
+                doc_mapping[stem] = doc
+            except Exception:
+                continue
+
+        print(f"   Created mapping for {len(doc_mapping)} documents with valid path_dicom")
+
+        # Filter documents that exist in converted_data and have valid image paths
+        filtered_docs = []
+        matched_keys = []
+        unmatched_keys = []
+        no_path_image = 0
+        no_valid_image = 0
+        no_consensus = 0
+        no_calcifiednodule = 0
+        excluded_count = 0
+
+        for json_key in converted_data.keys():
+            if json_key in doc_mapping:
+                doc = doc_mapping[json_key]
+                matched_keys.append(json_key)
+
+                # Check if document has valid image path
+                if 'path_image' not in doc:
+                    no_path_image += 1
+                    continue
+                try:
+                    image_path = mdb_d.get_valid_image_path(doc['path_image'])
+                    if image_path.exists():
+                        # Check if this document has consensus annotations
+                        if 'consensus' in converted_data[json_key] and converted_data[json_key]['consensus']:
+                            consensus_annotations = converted_data[json_key]['consensus']
+
+                            # exclude "finding_name": "Excluded"
+                            for annotation in consensus_annotations:
+                                for obj in annotation.get('objects', []):
+                                    if obj.get('finding_name') == 'Excluded':
+                                        excluded_count += 1
+                                        continue
+
+                            # Extract consensus objects
+                            consensus_objects = []
+                            for annotation in consensus_annotations:
+                                for obj in annotation.get('objects', []):
+                                    if obj.get('finding_name') == 'Calcified Nodule':
+                                        # Convert to calcifiednodule format
+                                        consensus_objects.append({
+                                            'finding_name': 'calcifiednodule',
+                                            'polygon': obj.get('polygon'),
+                                            'confidence': obj.get('confidence'),
+                                            'remark': obj.get('remark', '')
+                                        })
+
+                            if consensus_objects:
+                                # Create a copy of the document with updated objects (positive sample)
+                                updated_doc = doc.copy()
+                                updated_doc['objects'] = consensus_objects
+                                filtered_docs.append(updated_doc)
+                            else:
+                                # Create a copy of the document with empty objects (negative sample)
+                                updated_doc = doc.copy()
+                                updated_doc['objects'] = []
+                                filtered_docs.append(updated_doc)
+                                no_calcifiednodule += 1
+
+                        else:
+                            no_consensus += 1
+                    else:
+                        no_valid_image += 1
+                except Exception:
+                    no_valid_image += 1
+                    continue
+            else:
+                unmatched_keys.append(json_key)
+
+        print(f"   Matched keys: {len(matched_keys)}")
+        print(f"   Unmatched keys: {len(unmatched_keys)}")
+        print(f"   Filtering breakdown:")
+        print(f"     - No path_image: {no_path_image}")
+        print(f"     - No valid image: {no_valid_image}")
+        print(f"     - No consensus: {no_consensus}")
+        print(f"     - No calcifiednodule: {no_calcifiednodule}")
+        print(f"     - Excluded: {excluded_count}")
+        if unmatched_keys:
+            print(f"   First 10 unmatched keys: {unmatched_keys[:10]}")
+
+        print(f"   Filtered {len(filtered_docs)} documents with consensus annotations (excluded: {excluded_count})")
+
+        np.random.seed(42)
+        np.random.shuffle(filtered_docs)
+
+        print(f"📊 Train Collection: {len(filtered_docs)} (after filtering)")
+        return filtered_docs
 
     def _load_sdc_ppm_train_documents(self):
         """Load documents from train collection with consensus annotations."""
@@ -412,7 +536,7 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
     # Print area distribution
     print("📊 Document distribution by spatial areas:")
     for i, docs in enumerate(doc_area_mapping):
-        print(f"   Area {i+1}: {len(docs)} documents")
+        print(f"   Area {i + 1}: {len(docs)} documents")
 
     # Select validation samples based on validation mode
     val_docs = []
@@ -435,10 +559,12 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
             min_samples_for_training = max(1, len(docs) // 2)  # Keep at least 50% for training
             if len(docs) - samples_from_area < min_samples_for_training:
                 samples_from_area = max(0, len(docs) - min_samples_for_training)
-                print(f"⚠️  Area {i+1}: Limited to {samples_from_area} samples to preserve training data (requested {target_per_area + (1 if i < remaining_samples else 0)})")
+                print(
+                    f"⚠️  Area {i + 1}: Limited to {samples_from_area} samples to preserve training data (requested {target_per_area + (1 if i < remaining_samples else 0)})")
             elif len(docs) < samples_from_area:
                 samples_from_area = len(docs)
-                print(f"⚠️  Area {i+1}: Only {len(docs)} samples available (requested {target_per_area + (1 if i < remaining_samples else 0)})")
+                print(
+                    f"⚠️  Area {i + 1}: Only {len(docs)} samples available (requested {target_per_area + (1 if i < remaining_samples else 0)})")
 
             # Randomly sample from this area with reproducible seed
             if samples_from_area > 0:
@@ -462,15 +588,15 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
         for i, (docs, ratio) in enumerate(zip(doc_area_mapping, distribution_ratios)):
             # Calculate target samples for this area based on its data ratio
             target_samples = int(num_validation_samples * ratio)
-            
+
             # Ensure we don't take more than available
             samples_from_area = min(target_samples, len(docs))
-            
+
             # Special case: if area has very few samples, take only 50% to preserve training data
             min_samples_for_training = max(1, len(docs) // 2)  # Keep at least 50% for training
             if len(docs) - samples_from_area < min_samples_for_training:
                 samples_from_area = max(0, len(docs) - min_samples_for_training)
-                print(f"⚠️  Area {i+1}: Limited to {samples_from_area} samples to preserve training data")
+                print(f"⚠️  Area {i + 1}: Limited to {samples_from_area} samples to preserve training data")
 
             # Randomly sample from this area with reproducible seed
             if samples_from_area > 0:
@@ -518,12 +644,12 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
 
     print(f"📊 Final split: {len(val_docs)} validation, {len(train_docs)} training samples")
     print(
-        f"📊 Data utilization: {len(val_docs) + len(train_docs)}/{len(positive_docs)} ({100*(len(val_docs) + len(train_docs))/len(positive_docs):.1f}%)")
+        f"📊 Data utilization: {len(val_docs) + len(train_docs)}/{len(positive_docs)} ({100 * (len(val_docs) + len(train_docs)) / len(positive_docs):.1f}%)")
 
     # Print final area distribution
     print("📊 Final validation samples per area:")
     for i, count in enumerate(area_allocations):
-        print(f"   Area {i+1}: {count} samples")
+        print(f"   Area {i + 1}: {count} samples")
 
     return train_docs, val_docs
 

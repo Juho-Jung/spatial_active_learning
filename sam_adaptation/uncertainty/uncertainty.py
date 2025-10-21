@@ -310,7 +310,6 @@ def calculate_uncertainty_none(model, dataloader, device, return_detailed=False)
     without multiplying by lesionness values.
 
     Args:
-        model: The trained SAMLesionModel
         dataloader: DataLoader containing the data to evaluate
         device: Device to run the model on
         return_detailed: If True, return detailed predictions and uncertainties
@@ -334,15 +333,23 @@ def calculate_uncertainty_none(model, dataloader, device, return_detailed=False)
             # Calculate pixel-level entropy: H = -p*log(p) - (1-p)*log(1-p)
             epsilon = 1e-8
             p_safe = np.clip(pred_masks, epsilon, 1 - epsilon)
+            # Replace NaN/Inf to keep logs finite
+            p_safe = np.nan_to_num(p_safe, nan=0.5, posinf=1 - epsilon, neginf=epsilon)
             pixel_entropy = -(p_safe * np.log(p_safe) + (1 - p_safe) * np.log(1 - p_safe))
 
-            # Image-level uncertainty: mean of top-10% pixel entropies
+            # Image-level uncertainty: mean of top-10% pixel entropies (with guards)
             image_uncertainties = []
             for i in range(len(images)):
                 img_entropy = pixel_entropy[i].flatten()
+                # ensure at least one element
                 top_10_percent = int(0.1 * len(img_entropy))
-                top_entropies = np.sort(img_entropy)[-top_10_percent:]
-                image_uncertainty = np.mean(top_entropies)
+                top_k = max(1, top_10_percent)
+                # sanitize entropy array
+                img_entropy = np.nan_to_num(img_entropy, nan=0.0, posinf=0.0, neginf=0.0)
+                top_entropies = np.sort(img_entropy)[-top_k:]
+                image_uncertainty = float(np.mean(top_entropies))
+                if not np.isfinite(image_uncertainty):
+                    image_uncertainty = float(np.mean(img_entropy))
                 image_uncertainties.append(image_uncertainty)
 
             uncertainties.extend(image_uncertainties)
@@ -355,10 +362,7 @@ def calculate_uncertainty_none(model, dataloader, device, return_detailed=False)
         return {
             'uncertainties': np.array(uncertainties),
             'predictions': np.concatenate(all_predictions, axis=0) if all_predictions else np.array([]),
-            'entropies': np.concatenate(all_entropies, axis=0) if all_entropies else np.array([]),
-            # Dummy lesionness (all ones)
-            'lesionness': np.ones_like(np.concatenate(all_predictions, axis=0)) if all_predictions else np.array([])
-        }
+            'entropies': np.concatenate(all_entropies, axis=0) if all_entropies else np.array([])}
     else:
         return np.array(uncertainties)
 

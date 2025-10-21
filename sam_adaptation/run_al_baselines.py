@@ -7,34 +7,36 @@ Compares different selection strategies: random, uncertainty, area_random, uncer
 """
 
 import argparse
-from datetime import datetime
 import json
 import logging
 import os
-from pathlib import Path
 import sys
+from datetime import datetime
+from pathlib import Path
 
-# Import our modular components
-from base_utils import (cleanup_ddp, create_session_dir, plot_spatial_metrics_curves, plot_validation_curves, set_seed,
-                        setup_ddp, setup_logger)
-from dataset import create_spatial_validation_split, load_raw_documents, SAMLesionDataset, SpatialSplitDataset
-from losses import combo_loss
-from metrics import (calculate_bin_dice_metrics, calculate_metrics, calculate_performance_coverage,
-                     calculate_spatial_consistency, divide_image_into_areas)
 import numpy as np
-from sample_selection import create_spatial_bins, get_selection_strategy
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.optim as optim
+# Import our modular components
+from base_utils import (cleanup_ddp, create_session_dir,
+                        plot_spatial_metrics_curves, plot_validation_curves,
+                        set_seed, setup_ddp, setup_logger)
+from dataset import (SAMLesionDataset, SpatialSplitDataset,
+                     create_spatial_validation_split, load_raw_documents)
+from losses import combo_loss
+from metrics import (calculate_bin_dice_metrics, calculate_metrics,
+                     calculate_performance_coverage,
+                     calculate_spatial_consistency, divide_image_into_areas)
+from models import MCDropoutSAMModel, SAMLesionModel, SegmentationModel
+from sample_selection import create_spatial_bins, get_selection_strategy
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 from training import train_model_round
 from uncertainty import get_uncertainty_method
-
-from models import MCDropoutSAMModel, SAMLesionModel
 
 # Suppress albumentations warnings
 os.environ['NO_ALBUMENTATIONS_UPDATE'] = '1'
@@ -45,20 +47,24 @@ set_seed(42)
 
 def _parse_arguments():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='Active Learning SAM Baselines')
-    parser.add_argument('--sam_checkpoint', default="/opt/pxi/projects/calcified_nodule/spatial_active_learning/sam_vit_b.pth",
-                        help='SAM checkpoint path')
-    parser.add_argument('--vit_model', default='vit_b', choices=['vit_b', 'vit_l', 'vit_h'],
-                        help='SAM ViT model size')
+    parser = argparse.ArgumentParser(description='Active Learning Baselines')
+    parser.add_argument(
+        '--sam_checkpoint', default="/opt/pxi/projects/calcified_nodule/spatial_active_learning/sam_vit_b.pth", help='SAM checkpoint path')
+    parser.add_argument('--vit_model', default='vit_b',
+                        choices=['vit_b', 'vit_l', 'vit_h'], help='SAM ViT model size')
     parser.add_argument('--mode', required=True,
                         choices=['random', 'uncertainty', 'area_random', 'uncertainty_area',
-                                 'adaptive', 'diversity', 'diversity_uncertainty'],
+                                 'adaptive', 'adaptive_improved', 'adaptive_enhanced', 'adaptive_aggressive',
+                                 'diversity', 'diversity_uncertainty'],
                         help='Selection strategy')
-    parser.add_argument('--uncertainty_type', default='base',
+    parser.add_argument('--uncertainty_type', default='none',
                         choices=['base', 'mc_dropout', 'tta', 'fast_lesionness', 'none'],
                         help='Uncertainty calculation method')
+    parser.add_argument('--model_type', default='smp_efficientnet',
+                        choices=['smp_efficientnet', 'swinunetr', 'smp'],
+                        help='Model type')
     parser.add_argument('--target_lesion', default='pneumoperitoneum',
-                        choices=['calcification', 'nodule', 'pneumoperitoneum'],
+                        choices=['calcification', 'calcifiednodule', 'nodule', 'pneumoperitoneum'],
                         help='Target lesion type')
     parser.add_argument('--round_num', type=int, default=10, help='Number of AL rounds')
     parser.add_argument('--num_samples', type=int, default=20, help='Samples per round')
@@ -74,8 +80,8 @@ def _parse_arguments():
                         choices=['random_split', 'spatial_equal_split', 'spatial_dynamic_split'],
                         help='Validation data split mode: random_split (20/80 ratio), spatial_equal_split (equal per grid), spatial_dynamic_split (proportional per grid)')
     parser.add_argument('--collection', default='sdc_ppm_train-0908',
-                        choices=['validation_collection', 'train_collection', 'sdc_ppm_train-0908'],
-                        help='Data collection to use: validation_collection or train_collection or sdc_ppm_train-0908')
+                        choices=['validation_collection', 'train_collection', 'sdc_ppm_train-0908', 'both'],
+                        help='Data collection to use: validation_collection or train_collection or sdc_ppm_train-0908 or both')
     parser.add_argument('--num_validation_samples', type=int, default=None,
                         help='Number of validation samples to use (default: use all)')
     parser.add_argument('--grid_width', type=int, default=3, help='Spatial grid width (number of columns)')
@@ -105,9 +111,9 @@ def _setup_experiment(args):
 
 def _log_experiment_start(logger, args, output_dir):
     """Log experiment start information."""
-    logger.info("="*80)
+    logger.info("=" * 80)
     logger.info("Active Learning SAM Baselines Started")
-    logger.info("="*80)
+    logger.info("=" * 80)
     logger.info(f"Mode: {args.mode}")
     logger.info(f"Uncertainty type: {args.uncertainty_type}")
     logger.info(f"Target lesion: {args.target_lesion}")
@@ -149,8 +155,7 @@ def _create_spatial_split_datasets(args):
         areas=areas,
         seed=args.seed,
         num_validation_samples=args.num_validation_samples,
-        validation_mode=args.validate_data_mode
-    )
+        validation_mode=args.validate_data_mode)
 
     print("📊 Creating datasets from spatial split...")
     full_dataset = SpatialSplitDataset(train_docs, args.target_lesion)
@@ -207,11 +212,25 @@ def _create_random_split_datasets(args):
     return full_dataset, val_dataset
 
 
-def _create_model_for_uncertainty(args, device):
+def _create_model_for_uncertainty(args, device, previous_round_model_path=None):
     """Create model for uncertainty calculation."""
     if args.uncertainty_type == 'base':
         print("🔄 Creating SAM model for uncertainty calculation...")
         return SAMLesionModel(args.sam_checkpoint, args.vit_model).to(device)
+    elif args.uncertainty_type == 'none':
+        print("🔄 Creating segmentation model for uncertainty calculation...")
+        model = SegmentationModel(args.model_type, device).to(device)
+        # Load previous round checkpoint if available
+        if previous_round_model_path and os.path.exists(previous_round_model_path):
+            try:
+                checkpoint = torch.load(previous_round_model_path, map_location=device)
+                # training._save_model_checkpoint saves a dict with 'model_state_dict'
+                state_dict = checkpoint.get('model_state_dict', checkpoint)
+                model.load_state_dict(state_dict, strict=False)
+                print(f"📥 Loaded previous round model weights from: {previous_round_model_path}")
+            except Exception as e:
+                print(f"⚠️ Failed to load previous round model from {previous_round_model_path}: {e}")
+        return model
     else:  # mc_dropout
         print("🔄 Creating MC Dropout SAM model for uncertainty calculation...")
         return MCDropoutSAMModel(args.sam_checkpoint, args.vit_model).to(device)
@@ -222,6 +241,9 @@ def _create_model_for_training(args, device):
     if args.uncertainty_type == 'mc_dropout' and (args.mode == 'uncertainty' or args.mode == 'uncertainty_area'):
         print("🔄 Creating MC Dropout SAM model for training...")
         return MCDropoutSAMModel(args.sam_checkpoint, args.vit_model).to(device)
+    elif args.uncertainty_type == 'none':
+        print("🔄 Creating segmentation model for training...")
+        return SegmentationModel(args.model_type, device).to(device)
     else:
         print("🔄 Creating standard SAM model for training...")
         return SAMLesionModel(args.sam_checkpoint, args.vit_model).to(device)
@@ -243,7 +265,6 @@ def _calculate_uncertainties(args, model, full_dataset, pool_indices, selected_i
 
     # For adaptive mode, we need detailed predictions and uncertainties
     if args.mode == 'adaptive':
-        # Use fast_lesionness method for faster computation
         if args.uncertainty_type == 'fast_lesionness':
             return uncertainty_func(model, temp_loader, device, return_detailed=True)
         elif args.uncertainty_type == 'mc_dropout':
@@ -328,6 +349,33 @@ def _select_samples(args, pool_indices, uncertainties, selected_indices, areas, 
 
         return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
                               probs, lesionness, bin_id, lambda1, first_round_seed)
+    elif args.mode == 'adaptive_improved':
+        # For improved adaptive selection, we need additional parameters
+        probs = getattr(args, 'probs', None)
+        lesionness = getattr(args, 'lesionness', None)
+        bin_id = getattr(args, 'bin_id', None)
+        lambda1 = getattr(args, 'lambda1', 1.0)
+
+        return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
+                              probs, lesionness, bin_id, lambda1, first_round_seed)
+    elif args.mode == 'adaptive_enhanced':
+        # For enhanced adaptive selection, we need additional parameters
+        probs = getattr(args, 'probs', None)
+        lesionness = getattr(args, 'lesionness', None)
+        bin_id = getattr(args, 'bin_id', None)
+        lambda1 = getattr(args, 'lambda1', 1.0)
+
+        return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
+                              probs, lesionness, bin_id, lambda1, first_round_seed)
+    elif args.mode == 'adaptive_aggressive':
+        # For aggressive adaptive selection, we need additional parameters
+        probs = getattr(args, 'probs', None)
+        lesionness = getattr(args, 'lesionness', None)
+        bin_id = getattr(args, 'bin_id', None)
+        lambda1 = getattr(args, 'lambda1', 1.0)
+
+        return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
+                              probs, lesionness, bin_id, lambda1, first_round_seed)
     else:
         raise ValueError(f"Unknown selection mode: {args.mode}")
 
@@ -367,9 +415,9 @@ def _generate_plots(results, output_dir, session_name):
 def _log_final_results(logger, results, selected_indices, output_dir):
     """Log final experiment results."""
     final_spatial = results[-1]['spatial_metrics']
-    logger.info("="*80)
+    logger.info("=" * 80)
     logger.info("Active Learning Completed!")
-    logger.info("="*80)
+    logger.info("=" * 80)
     logger.info(f"Final validation Loss: {results[-1]['val_loss']:.4f}")
     logger.info(f"Final validation Dice: {results[-1]['val_dice']:.4f}")
     logger.info(f"Final spatial metrics:")
@@ -404,7 +452,7 @@ def _print_final_summary(args, results, selected_indices, output_dir):
 
 
 def main():
-    """Main function for Active Learning SAM Baselines."""
+    """Main function for Active Learning Baselines."""
     args = _parse_arguments()
 
     # Setup experiment environment
@@ -430,6 +478,7 @@ def main():
         print(f"📊 Validation samples limited to: {args.num_validation_samples}")
 
     # Active Learning rounds
+    previous_round_model_path = None
     for round_idx in range(args.round_num):
         print(f"\n🔄 Round {round_idx + 1}/{args.round_num}")
         logger.info(f"Starting Round {round_idx + 1}/{args.round_num}")
@@ -442,23 +491,21 @@ def main():
 
         # Calculate uncertainties if needed
         uncertainties = None
-        if args.mode in ['uncertainty', 'uncertainty_area', 'adaptive', 'diversity', 'diversity_uncertainty']:
-            model = _create_model_for_uncertainty(args, device)
+        if args.mode in ['uncertainty', 'uncertainty_area', 'adaptive', 'adaptive_improved', 'diversity', 'diversity_uncertainty']:
+            model = _create_model_for_uncertainty(args, device, previous_round_model_path)
             uncertainty_data = _calculate_uncertainties(
                 args, model, full_dataset, pool_indices, selected_indices, device)
 
-            if args.mode == 'adaptive' and isinstance(uncertainty_data, dict):
+            if args.mode in ['adaptive', 'adaptive_improved'] and isinstance(uncertainty_data, dict):
                 # Extract uncertainties and prepare additional data for adaptive selection
                 uncertainties = uncertainty_data['uncertainties']
                 args.probs = uncertainty_data['predictions']  # Custom decoder predictions
 
-                # Use lesionness from fast_lesionness method if available, otherwise fallback to sam_predictions
                 if 'lesionness' in uncertainty_data:
-                    args.lesionness = uncertainty_data['lesionness']  # Fast lesionness from SAMLesionModel
+                    args.lesionness = uncertainty_data['lesionness']
                 elif 'sam_predictions' in uncertainty_data:
-                    args.lesionness = uncertainty_data['sam_predictions']  # Fallback to SAM original predictions
+                    args.lesionness = uncertainty_data['sam_predictions']
                 else:
-                    # For TTA and other methods that don't provide sam_predictions, use predictions as lesionness
                     args.lesionness = uncertainty_data.get('predictions', None)
 
                 args.bin_id = _create_spatial_bins_for_dataset(full_dataset, pool_indices, args)
@@ -485,21 +532,18 @@ def main():
         model = _create_model_for_training(args, device)
 
         print("🏋️ Training model...")
-        val_loss, val_dice, val_bin_metrics, current_bin_dices = train_model_round(
+        val_loss, val_dice, val_bin_metrics, current_bin_dices, round_model_save_path = train_model_round(
             model, train_dataset, val_dataset, device, args.train_epochs, args.batch_size,
             round_idx + 1, output_dir, args.patience, args.min_delta, prev_bin_dices,
-            args.grid_width, args.grid_height
-        )
+            args.grid_width, args.grid_height, args.uncertainty_type)
 
         # Save round results
-        round_result = {
-            'round': round_idx + 1,
-            'selected_indices': new_indices,
-            'total_selected': len(selected_indices),
-            'val_loss': float(val_loss),
-            'val_dice': float(val_dice),
-            'spatial_metrics': {key: float(val) for key, val in val_bin_metrics.items()}
-        }
+        round_result = {'round': round_idx + 1,
+                        'selected_indices': new_indices,
+                        'total_selected': len(selected_indices),
+                        'val_loss': float(val_loss),
+                        'val_dice': float(val_dice),
+                        'spatial_metrics': {key: float(val) for key, val in val_bin_metrics.items()}}
         results.append(round_result)
 
         # Log round results
@@ -507,6 +551,7 @@ def main():
 
         # Update for next round
         prev_bin_dices = current_bin_dices
+        previous_round_model_path = round_model_save_path
         _save_results(results, output_dir)
 
     # Final results and cleanup

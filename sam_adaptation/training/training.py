@@ -8,19 +8,24 @@ early stopping, and logging utilities.
 
 import logging
 import os
+import sys
 
-from losses import combo_loss
-from metrics import (calculate_bin_dice_metrics, calculate_metrics, calculate_performance_coverage,
-                     calculate_spatial_consistency, divide_image_into_areas)
 import torch
 import torch.optim as optim
+from losses import combo_loss
+from metrics import (calculate_bin_dice_metrics, calculate_metrics,
+                     calculate_performance_coverage,
+                     calculate_spatial_consistency, divide_image_into_areas)
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+# Add parent directory to path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def train_model_round(model, train_dataset, val_dataset, device, epochs=50, batch_size=8,
                       round_num=1, output_dir=None, patience=15, min_delta=0.001, prev_bin_dices=None,
-                      grid_width=2, grid_height=3):
+                      grid_width=2, grid_height=3, uncertainty_type='base'):
     """
     Train model for one round with early stopping.
 
@@ -47,8 +52,11 @@ def train_model_round(model, train_dataset, val_dataset, device, epochs=50, batc
     # Define areas for spatial evaluation
     areas = divide_image_into_areas(grid_width=grid_width, grid_height=grid_height)
 
-    # Setup optimizer and scheduler
-    optimizer = optim.AdamW(model.decoder.parameters(), lr=1e-4, weight_decay=1e-4)
+    if uncertainty_type == 'none':
+        optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    else:
+        optimizer = optim.AdamW(model.decoder.parameters(), lr=1e-4, weight_decay=1e-4)
+
     scheduler = optim.lr_scheduler.OneCycleLR(
         optimizer, max_lr=1e-3, epochs=epochs, steps_per_epoch=len(train_loader)
     )
@@ -67,12 +75,12 @@ def train_model_round(model, train_dataset, val_dataset, device, epochs=50, batc
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
 
-    _save_model_checkpoint(model, best_model_state, best_val_loss, best_epoch, round_num, output_dir)
+    round_model_save_path = _save_model_checkpoint(model, best_model_state, best_val_loss, best_epoch, round_num, output_dir)
 
     # Log completion
     _log_round_completion(round_logger, round_num, best_val_loss, best_epoch, epochs)
 
-    return best_val_loss, final_val_dice, final_spatial_metrics, current_bin_dices
+    return best_val_loss, final_val_dice, final_spatial_metrics, current_bin_dices, round_model_save_path
 
 
 def _setup_round_logger(output_dir, round_num, train_dataset, val_dataset, epochs, batch_size):
@@ -100,14 +108,14 @@ def _setup_round_logger(output_dir, round_num, train_dataset, val_dataset, epoch
     round_logger.addHandler(file_handler)
 
     # Log round start
-    round_logger.info("="*80)
+    round_logger.info("=" * 80)
     round_logger.info(f"Round {round_num} Training Started")
-    round_logger.info("="*80)
+    round_logger.info("=" * 80)
     round_logger.info(f"Training samples: {len(train_dataset)}")
     round_logger.info(f"Validation samples: {len(val_dataset)}")
     round_logger.info(f"Epochs: {epochs}")
     round_logger.info(f"Batch size: {batch_size}")
-    round_logger.info("-"*80)
+    round_logger.info("-" * 80)
 
     return round_logger
 
@@ -347,7 +355,9 @@ def _save_model_checkpoint(model, best_model_state, best_val_loss, best_epoch, r
         'best_epoch': best_epoch,
         'round_num': round_num
     }, model_save_path)
-    print(f"💾 Best model saved: {model_save_path}")
+    print(f"💾 {round_num} model saved: {model_save_path}")
+
+    return model_save_path
 
 
 # def _calculate_final_metrics(model, val_loader, areas, device, prev_bin_dices):
@@ -366,9 +376,9 @@ def _log_round_completion(round_logger, round_num, best_val_loss, best_epoch, to
     if not round_logger:
         return
 
-    round_logger.info("="*80)
+    round_logger.info("=" * 80)
     round_logger.info(f"Round {round_num} Training Completed")
     round_logger.info(f"Best Validation Loss: {best_val_loss:.6f} at epoch {best_epoch}")
     round_logger.info(f"Total epochs trained: {total_epochs}")
     round_logger.info(f"Model saved: checkpoint/round{round_num}_best_model.pth")
-    round_logger.info("="*80)
+    round_logger.info("=" * 80)
