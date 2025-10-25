@@ -10,8 +10,8 @@ import sys
 from pathlib import Path
 
 import albumentations as A
+import mdb.collection as mdb_c
 import mdb.document as mdb_d
-import mdb.load as mdb_c
 import numpy as np
 import torch
 import utils.image_io as image_io
@@ -21,6 +21,7 @@ sys.path.append('/opt/pxi')
 
 
 class SAMLesionDataset(Dataset):
+
     """Dataset for SAM-based lesion segmentation."""
 
     def __init__(self, collection_name="validation_internal", target_size=(512, 512),
@@ -158,7 +159,7 @@ class SAMLesionDataset(Dataset):
                     no_path_image += 1
                     continue
                 try:
-                    image_path = mdb_d.get_valid_image_path(doc['path_image'])
+                    image_path = mdb_d.resolve_image_path(doc['path_image'])
                     if image_path.exists():
                         # Check if this document has consensus annotations
                         if 'consensus' in converted_data[json_key] and converted_data[json_key]['consensus']:
@@ -341,7 +342,7 @@ class SAMLesionDataset(Dataset):
         doc = self.documents[idx]
 
         # Load image
-        image_path = mdb_d.get_valid_image_path(doc['path_image'])
+        image_path = mdb_d.resolve_image_path(doc['path_image'])
         image = image_io.load_as_vis(image_path=image_path, image_type='path_image')
 
         if isinstance(image, np.ndarray):
