@@ -75,7 +75,8 @@ def train_model_round(model, train_dataset, val_dataset, device, epochs=50, batc
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
 
-    round_model_save_path = _save_model_checkpoint(model, best_model_state, best_val_loss, best_epoch, round_num, output_dir)
+    round_model_save_path = _save_model_checkpoint(
+        model, best_model_state, best_val_loss, best_epoch, round_num, output_dir)
 
     # Log completion
     _log_round_completion(round_logger, round_num, best_val_loss, best_epoch, epochs)

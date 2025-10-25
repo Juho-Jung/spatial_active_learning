@@ -49,13 +49,17 @@ def _parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Active Learning Baselines')
     parser.add_argument(
-        '--sam_checkpoint', default="/opt/pxi/projects/calcified_nodule/spatial_active_learning/sam_vit_b.pth", help='SAM checkpoint path')
+        '--sam_checkpoint', default="/opt/spatial_active_learning/sam_vit_b.pth", help='SAM checkpoint path')
     parser.add_argument('--vit_model', default='vit_b',
                         choices=['vit_b', 'vit_l', 'vit_h'], help='SAM ViT model size')
     parser.add_argument('--mode', required=True,
                         choices=['random', 'uncertainty', 'area_random', 'uncertainty_area',
-                                 'adaptive', 'adaptive_improved', 'adaptive_enhanced', 'adaptive_aggressive',
-                                 'diversity', 'diversity_uncertainty'],
+                                 'adaptive', 'adaptive_improved',
+                                 'adaptive_multi_scale', 'adaptive_performance_monitoring',
+                                 'diversity', 'diversity_uncertainty',
+                                 # ULTRA AGGRESSIVE versions
+                                 'adaptive_ultra', 'adaptive_improved_ultra',
+                                 'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra'],
                         help='Selection strategy')
     parser.add_argument('--uncertainty_type', default='none',
                         choices=['base', 'mc_dropout', 'tta', 'fast_lesionness', 'none'],
@@ -63,7 +67,7 @@ def _parse_arguments():
     parser.add_argument('--model_type', default='smp_efficientnet',
                         choices=['smp_efficientnet', 'swinunetr', 'smp'],
                         help='Model type')
-    parser.add_argument('--target_lesion', default='pneumoperitoneum',
+    parser.add_argument('--target_lesion', default='calcifiednodule',
                         choices=['calcification', 'calcifiednodule', 'nodule', 'pneumoperitoneum'],
                         help='Target lesion type')
     parser.add_argument('--round_num', type=int, default=10, help='Number of AL rounds')
@@ -79,13 +83,13 @@ def _parse_arguments():
     parser.add_argument('--validate_data_mode', default='spatial_equal_split',
                         choices=['random_split', 'spatial_equal_split', 'spatial_dynamic_split'],
                         help='Validation data split mode: random_split (20/80 ratio), spatial_equal_split (equal per grid), spatial_dynamic_split (proportional per grid)')
-    parser.add_argument('--collection', default='sdc_ppm_train-0908',
+    parser.add_argument('--collection', default='both',
                         choices=['validation_collection', 'train_collection', 'sdc_ppm_train-0908', 'both'],
                         help='Data collection to use: validation_collection or train_collection or sdc_ppm_train-0908 or both')
-    parser.add_argument('--num_validation_samples', type=int, default=None,
+    parser.add_argument('--num_validation_samples', type=int, default=100,
                         help='Number of validation samples to use (default: use all)')
-    parser.add_argument('--grid_width', type=int, default=3, help='Spatial grid width (number of columns)')
-    parser.add_argument('--grid_height', type=int, default=4, help='Spatial grid height (number of rows)')
+    parser.add_argument('--grid_width', type=int, default=5, help='Spatial grid width (number of columns)')
+    parser.add_argument('--grid_height', type=int, default=5, help='Spatial grid height (number of rows)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
     return parser.parse_args()
 
@@ -251,7 +255,8 @@ def _create_model_for_training(args, device):
 
 def _calculate_uncertainties(args, model, full_dataset, pool_indices, selected_indices, device):
     """Calculate uncertainties for sample selection."""
-    if args.mode not in ['uncertainty', 'uncertainty_area', 'adaptive', 'diversity_uncertainty']:
+    if args.mode not in ['uncertainty', 'uncertainty_area', 'adaptive', 'adaptive_improved', 'adaptive_multi_scale', 'adaptive_performance_monitoring', 'diversity_uncertainty',
+                         'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra']:
         return None
 
     uncertainty_func = get_uncertainty_method(args.uncertainty_type)
@@ -263,8 +268,9 @@ def _calculate_uncertainties(args, model, full_dataset, pool_indices, selected_i
     temp_dataset = torch.utils.data.Subset(full_dataset, pool_indices)
     temp_loader = DataLoader(temp_dataset, batch_size=args.batch_size, shuffle=False)
 
-    # For adaptive mode, we need detailed predictions and uncertainties
-    if args.mode == 'adaptive':
+    # For adaptive modes, we need detailed predictions and uncertainties
+    if args.mode in ['adaptive', 'adaptive_improved', 'adaptive_hybrid', 'adaptive_multi_scale', 'adaptive_performance_monitoring',
+                     'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra']:
         if args.uncertainty_type == 'fast_lesionness':
             return uncertainty_func(model, temp_loader, device, return_detailed=True)
         elif args.uncertainty_type == 'mc_dropout':
@@ -358,8 +364,8 @@ def _select_samples(args, pool_indices, uncertainties, selected_indices, areas, 
 
         return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
                               probs, lesionness, bin_id, lambda1, first_round_seed)
-    elif args.mode == 'adaptive_enhanced':
-        # For enhanced adaptive selection, we need additional parameters
+    elif args.mode == 'adaptive_hybrid':
+        # For hybrid adaptive selection, we need additional parameters
         probs = getattr(args, 'probs', None)
         lesionness = getattr(args, 'lesionness', None)
         bin_id = getattr(args, 'bin_id', None)
@@ -367,8 +373,28 @@ def _select_samples(args, pool_indices, uncertainties, selected_indices, areas, 
 
         return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
                               probs, lesionness, bin_id, lambda1, first_round_seed)
-    elif args.mode == 'adaptive_aggressive':
-        # For aggressive adaptive selection, we need additional parameters
+    elif args.mode == 'adaptive_multi_scale':
+        # For multi-scale adaptive selection, we need additional parameters
+        probs = getattr(args, 'probs', None)
+        lesionness = getattr(args, 'lesionness', None)
+        bin_id = getattr(args, 'bin_id', None)
+        lambda1 = getattr(args, 'lambda1', 1.0)
+        grid_scales = [(3, 3), (5, 5), (7, 7)]  # Default grid scales
+
+        return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
+                              probs, lesionness, bin_id, lambda1, grid_scales, first_round_seed)
+    elif args.mode == 'adaptive_performance_monitoring':
+        # For performance monitoring adaptive selection, we need additional parameters
+        probs = getattr(args, 'probs', None)
+        lesionness = getattr(args, 'lesionness', None)
+        bin_id = getattr(args, 'bin_id', None)
+        lambda1 = getattr(args, 'lambda1', 1.0)
+        performance_history = getattr(args, 'performance_history', None)
+
+        return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
+                              probs, lesionness, bin_id, lambda1, performance_history, first_round_seed)
+    elif args.mode == 'adaptive_ultra':
+        # For ULTRA AGGRESSIVE adaptive selection, we need additional parameters
         probs = getattr(args, 'probs', None)
         lesionness = getattr(args, 'lesionness', None)
         bin_id = getattr(args, 'bin_id', None)
@@ -376,6 +402,35 @@ def _select_samples(args, pool_indices, uncertainties, selected_indices, areas, 
 
         return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
                               probs, lesionness, bin_id, lambda1, first_round_seed)
+    elif args.mode == 'adaptive_improved_ultra':
+        # For ULTRA AGGRESSIVE improved adaptive selection, we need additional parameters
+        probs = getattr(args, 'probs', None)
+        lesionness = getattr(args, 'lesionness', None)
+        bin_id = getattr(args, 'bin_id', None)
+        lambda1 = getattr(args, 'lambda1', 1.0)
+
+        return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
+                              probs, lesionness, bin_id, lambda1, first_round_seed)
+    elif args.mode == 'adaptive_multi_scale_ultra':
+        # For ULTRA AGGRESSIVE multi-scale adaptive selection, we need additional parameters
+        probs = getattr(args, 'probs', None)
+        lesionness = getattr(args, 'lesionness', None)
+        bin_id = getattr(args, 'bin_id', None)
+        lambda1 = getattr(args, 'lambda1', 1.0)
+        grid_scales = [(3, 3), (5, 5), (7, 7)]  # Default grid scales
+
+        return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
+                              probs, lesionness, bin_id, lambda1, grid_scales, first_round_seed)
+    elif args.mode == 'adaptive_performance_monitoring_ultra':
+        # For ULTRA AGGRESSIVE performance monitoring adaptive selection, we need additional parameters
+        probs = getattr(args, 'probs', None)
+        lesionness = getattr(args, 'lesionness', None)
+        bin_id = getattr(args, 'bin_id', None)
+        lambda1 = getattr(args, 'lambda1', 1.0)
+        performance_history = getattr(args, 'performance_history', None)
+
+        return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
+                              probs, lesionness, bin_id, lambda1, performance_history, first_round_seed)
     else:
         raise ValueError(f"Unknown selection mode: {args.mode}")
 
@@ -384,10 +439,10 @@ def _log_round_results(logger, round_idx, new_indices, selected_indices, val_los
     """Log results for current round."""
     print(f"✅ Round {round_idx + 1} completed - Val Loss: {val_loss:.4f}, Val Dice: {val_dice:.4f}")
     print(
-        f"   📊 Spatial Metrics - Worst Bin: {val_bin_metrics['worst_bin_dice']:.4f}, Perf Coverage: {val_bin_metrics['performance_coverage']:.4f}")
+        f"   📊 Spatial Metrics - Worst Bin: {val_bin_metrics['worst_bin_dice']:.4f}, Perf Coverage: {val_bin_metrics['performance_coverage']:.4f}, Spatial Consistency: {val_bin_metrics['spatial_consistency']:.4f}")
     logger.info(f"Round {round_idx + 1} completed - Val Loss: {val_loss:.4f}, Val Dice: {val_dice:.4f}")
     logger.info(
-        f"Spatial Metrics - Worst Bin: {val_bin_metrics['worst_bin_dice']:.4f}, Perf Coverage: {val_bin_metrics['performance_coverage']:.4f}")
+        f"Spatial Metrics - Worst Bin: {val_bin_metrics['worst_bin_dice']:.4f}, Perf Coverage: {val_bin_metrics['performance_coverage']:.4f}, Spatial Consistency: {val_bin_metrics['spatial_consistency']:.4f}")
 
 
 def _save_results(results, output_dir):
@@ -491,12 +546,15 @@ def main():
 
         # Calculate uncertainties if needed
         uncertainties = None
-        if args.mode in ['uncertainty', 'uncertainty_area', 'adaptive', 'adaptive_improved', 'diversity', 'diversity_uncertainty']:
+        if args.mode in ['uncertainty', 'uncertainty_area', 'adaptive', 'adaptive_improved',
+                         'adaptive_multi_scale', 'adaptive_performance_monitoring', 'diversity', 'diversity_uncertainty',
+                         'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra']:
             model = _create_model_for_uncertainty(args, device, previous_round_model_path)
             uncertainty_data = _calculate_uncertainties(
                 args, model, full_dataset, pool_indices, selected_indices, device)
 
-            if args.mode in ['adaptive', 'adaptive_improved'] and isinstance(uncertainty_data, dict):
+            if args.mode in ['adaptive', 'adaptive_improved', 'adaptive_multi_scale', 'adaptive_performance_monitoring',
+                             'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra'] and isinstance(uncertainty_data, dict):
                 # Extract uncertainties and prepare additional data for adaptive selection
                 uncertainties = uncertainty_data['uncertainties']
                 args.probs = uncertainty_data['predictions']  # Custom decoder predictions

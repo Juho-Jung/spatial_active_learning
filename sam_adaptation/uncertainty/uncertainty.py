@@ -71,7 +71,8 @@ def calculate_uncertainty_base(model, dataloader, device, return_detailed=False,
             'uncertainties': np.array(uncertainties),
             'predictions': np.concatenate(all_predictions, axis=0) if all_predictions else np.array([]),
             'pixel_uncertainties': np.concatenate(all_uncertainties, axis=0) if all_uncertainties else np.array([]),
-            'sam_predictions': np.concatenate(all_sam_predictions, axis=0) if all_sam_predictions else np.array([])
+            'sam_predictions': np.concatenate(all_sam_predictions, axis=0) if all_sam_predictions else np.array([]),
+            'lesionness': np.concatenate(all_sam_predictions, axis=0) if all_sam_predictions else np.array([])  # Use SAM predictions as lesionness
         }
         if return_features and all_features:
             result['features'] = np.concatenate(all_features, axis=0)
