@@ -10,11 +10,17 @@ import argparse
 import json
 import os
 import sys
+from collections import defaultdict
 from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
-from collections import defaultdict
 import seaborn as sns
+
+# Add project root to path
+sys.path.append('/opt/pxi/projects/calcified_nodule/spatial_active_learning')
+sys.path.append('/opt/pxi/projects/calcified_nodule/spatial_active_learning/sam_adaptation')
+sys.path.append('/opt/pxi')
 
 # Set style for better plots
 plt.style.use('seaborn-v0_8')
@@ -25,20 +31,21 @@ def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Active Learning Performance Comparison')
     parser.add_argument('--result_paths', nargs='+', required=True,
-                       help='List of result.json file paths to compare (max 8)')
-    parser.add_argument('--output_dir', default='output_comparison/performance',
-                       help='Output directory for comparison plots')
-    parser.add_argument('--target_lesion', default='pneumoperitoneum',
-                       help='Target lesion type for plot titles')
+                        help='List of result.json file paths to compare (max 8)')
+    parser.add_argument('--output_dir', default='/team/team_pxi/workspace/juhojung/spatial_active_learning/output_comparison/performance',
+                        help='Output directory for comparison plots')
+    parser.add_argument('--target_lesion', default='calcifiednodule',
+                        help='Target lesion type for plot titles')
     parser.add_argument('--max_models', type=int, default=8,
-                       help='Maximum number of models to compare (default: 8)')
+                        help='Maximum number of models to compare (default: 8)')
+    parser.add_argument('--split_type', choices=['spatial_dynamic_split', 'spatial_equal_split'],
+                        help='Split type to determine subdirectory (auto-detected if not provided)')
     return parser.parse_args()
 
 
 def extract_model_name(result_path):
     """Extract model name from result path."""
     # Extract the strategy_uncertainty part from path
-    # e.g., /path/to/adaptive_base_20250919_172458/results.json -> adaptive_base
     path_parts = Path(result_path).parts
     for part in path_parts:
         if '_' in part and any(x in part for x in ['adaptive', 'random', 'uncertainty', 'area_random', 'diversity']):
@@ -51,31 +58,69 @@ def extract_model_name(result_path):
                     if p.isdigit() and len(p) == 8:
                         timestamp_start = i
                         break
-                
+
                 if timestamp_start is not None:
-                    return '_'.join(parts[:timestamp_start])
+                    full_name = '_'.join(parts[:timestamp_start])
                 else:
-                    return '_'.join(parts[:-1])  # Remove last part if it looks like timestamp
+                    full_name = '_'.join(parts[:-1])  # Remove last part if it looks like timestamp
+
+                # Clean up the name to show only the main strategy
+                if 'uncertainty' in full_name:
+                    return 'uncertainty'
+                elif 'random' in full_name:
+                    return 'random'
+                elif 'adaptive_improved' in full_name:
+                    return 'adaptive_improved'
+                elif 'adaptive_multi_scale' in full_name:
+                    return 'adaptive_multi_scale'
+                elif 'adaptive_performance_monitoring' in full_name:
+                    return 'adaptive_performance_monitoring'
+                elif 'adaptive_ultra' in full_name:
+                    return 'adaptive_ultra'
+                elif 'adaptive_improved_ultra' in full_name:
+                    return 'adaptive_improved_ultra'
+                elif 'adaptive_multi_scale_ultra' in full_name:
+                    return 'adaptive_multi_scale_ultra'
+                elif 'adaptive_performance_monitoring_ultra' in full_name:
+                    return 'adaptive_performance_monitoring_ultra'
+                elif 'adaptive' in full_name:
+                    return 'adaptive'
+                elif 'area_random' in full_name:
+                    return 'area_random'
+                elif 'diversity' in full_name:
+                    return 'diversity'
+                else:
+                    return full_name
+    return 'unknown'
+
+
+def detect_split_type(result_paths):
+    """Detect split type from result paths."""
+    for result_path in result_paths:
+        if 'spatial_dynamic_split' in result_path:
+            return 'spatial_dynamic_split'
+        elif 'spatial_equal_split' in result_path:
+            return 'spatial_equal_split'
     return 'unknown'
 
 
 def load_results(result_paths, max_models=8):
     """Load results from multiple JSON files."""
     results = {}
-    
+
     if len(result_paths) > max_models:
         print(f"⚠️  Warning: {len(result_paths)} result files provided, but max_models is {max_models}")
         print(f"   Using only the first {max_models} files")
         result_paths = result_paths[:max_models]
-    
+
     for i, result_path in enumerate(result_paths):
         if not os.path.exists(result_path):
             print(f"⚠️  Warning: Result file not found: {result_path}")
             continue
-            
+
         model_name = extract_model_name(result_path)
         print(f"📊 Loading results for {model_name} from {result_path}")
-        
+
         try:
             with open(result_path, 'r') as f:
                 data = json.load(f)
@@ -84,23 +129,23 @@ def load_results(result_paths, max_models=8):
         except Exception as e:
             print(f"❌ Error loading {result_path}: {e}")
             continue
-    
+
     return results
 
 
 def extract_metrics(results):
     """Extract metrics from results for plotting."""
     metrics_data = defaultdict(lambda: defaultdict(list))
-    
+
     for model_name, rounds in results.items():
         for round_data in rounds:
             round_num = round_data['round']
-            
+
             # Basic metrics
             metrics_data[model_name]['round'].append(round_num)
             metrics_data[model_name]['val_loss'].append(round_data['val_loss'])
             metrics_data[model_name]['val_dice'].append(round_data['val_dice'])
-            
+
             # Spatial metrics
             spatial_metrics = round_data['spatial_metrics']
             metrics_data[model_name]['worst_bin_dice'].append(spatial_metrics['worst_bin_dice'])
@@ -111,7 +156,7 @@ def extract_metrics(results):
             metrics_data[model_name]['avg_bin_dice'].append(spatial_metrics['avg_bin_dice'])
             metrics_data[model_name]['min_bin_dice'].append(spatial_metrics['min_bin_dice'])
             metrics_data[model_name]['max_bin_dice'].append(spatial_metrics['max_bin_dice'])
-    
+
     return metrics_data
 
 
@@ -119,7 +164,7 @@ def plot_spatial_metrics(metrics_data, output_dir, target_lesion):
     """Plot spatial metrics comparison."""
     fig, axes = plt.subplots(2, 2, figsize=(15, 12))
     fig.suptitle(f'Spatial Metrics Comparison - {target_lesion}', fontsize=16, fontweight='bold')
-    
+
     # Plot 1: Worst Bin Dice
     ax1 = axes[0, 0]
     for model_name, data in metrics_data.items():
@@ -129,7 +174,7 @@ def plot_spatial_metrics(metrics_data, output_dir, target_lesion):
     ax1.set_ylabel('Worst Bin Dice')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
-    
+
     # Plot 2: P10 Bin Dice
     ax2 = axes[0, 1]
     for model_name, data in metrics_data.items():
@@ -139,7 +184,7 @@ def plot_spatial_metrics(metrics_data, output_dir, target_lesion):
     ax2.set_ylabel('P10 Bin Dice')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
-    
+
     # Plot 3: Bin Standard Deviation
     ax3 = axes[1, 0]
     for model_name, data in metrics_data.items():
@@ -149,7 +194,7 @@ def plot_spatial_metrics(metrics_data, output_dir, target_lesion):
     ax3.set_ylabel('Bin Std')
     ax3.legend()
     ax3.grid(True, alpha=0.3)
-    
+
     # Plot 4: Spatial Consistency
     ax4 = axes[1, 1]
     for model_name, data in metrics_data.items():
@@ -159,7 +204,7 @@ def plot_spatial_metrics(metrics_data, output_dir, target_lesion):
     ax4.set_ylabel('Spatial Consistency')
     ax4.legend()
     ax4.grid(True, alpha=0.3)
-    
+
     plt.tight_layout()
     output_path = os.path.join(output_dir, 'spatial_metrics_comparison.png')
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
@@ -170,16 +215,16 @@ def plot_spatial_metrics(metrics_data, output_dir, target_lesion):
 def plot_performance_coverage(metrics_data, output_dir, target_lesion):
     """Plot performance coverage comparison."""
     plt.figure(figsize=(10, 6))
-    
+
     for model_name, data in metrics_data.items():
         plt.plot(data['round'], data['performance_coverage'], marker='o', label=model_name, linewidth=2)
-    
+
     plt.title(f'Performance Coverage Comparison - {target_lesion}', fontsize=14, fontweight='bold')
     plt.xlabel('Round')
     plt.ylabel('Performance Coverage')
     plt.legend()
     plt.grid(True, alpha=0.3)
-    
+
     output_path = os.path.join(output_dir, 'performance_coverage_comparison.png')
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
@@ -190,7 +235,7 @@ def plot_combined_metrics(metrics_data, output_dir, target_lesion):
     """Plot combined metrics comparison."""
     fig, axes = plt.subplots(2, 2, figsize=(15, 12))
     fig.suptitle(f'Combined Metrics Comparison - {target_lesion}', fontsize=16, fontweight='bold')
-    
+
     # Plot 1: Validation Dice
     ax1 = axes[0, 0]
     for model_name, data in metrics_data.items():
@@ -200,7 +245,7 @@ def plot_combined_metrics(metrics_data, output_dir, target_lesion):
     ax1.set_ylabel('Validation Dice')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
-    
+
     # Plot 2: Validation Loss
     ax2 = axes[0, 1]
     for model_name, data in metrics_data.items():
@@ -210,7 +255,7 @@ def plot_combined_metrics(metrics_data, output_dir, target_lesion):
     ax2.set_ylabel('Validation Loss')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
-    
+
     # Plot 3: Average Bin Dice
     ax3 = axes[1, 0]
     for model_name, data in metrics_data.items():
@@ -220,7 +265,7 @@ def plot_combined_metrics(metrics_data, output_dir, target_lesion):
     ax3.set_ylabel('Average Bin Dice')
     ax3.legend()
     ax3.grid(True, alpha=0.3)
-    
+
     # Plot 4: Min/Max Bin Dice Range
     ax4 = axes[1, 1]
     for model_name, data in metrics_data.items():
@@ -233,7 +278,7 @@ def plot_combined_metrics(metrics_data, output_dir, target_lesion):
     ax4.set_ylabel('Bin Dice')
     ax4.legend()
     ax4.grid(True, alpha=0.3)
-    
+
     plt.tight_layout()
     output_path = os.path.join(output_dir, 'combined_metrics_comparison.png')
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
@@ -245,7 +290,7 @@ def plot_normalized_metrics(metrics_data, output_dir, target_lesion):
     """Plot normalized performance coverage and spatial consistency comparison."""
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
     fig.suptitle(f'Normalized Spatial Metrics Comparison - {target_lesion}', fontsize=16, fontweight='bold')
-    
+
     # Plot 1: Normalized Performance Coverage
     ax1 = axes[0]
     for model_name, data in metrics_data.items():
@@ -262,7 +307,7 @@ def plot_normalized_metrics(metrics_data, output_dir, target_lesion):
                 normalized_perf_cov = (perf_cov - min_perf_cov) / (max_perf_cov - min_perf_cov)
             else:
                 normalized_perf_cov = np.ones_like(perf_cov)
-            
+
             ax1.plot(data['round'], normalized_perf_cov, marker='o', label=model_name, linewidth=2)
     ax1.set_title('Normalized Performance Coverage')
     ax1.set_xlabel('Round')
@@ -270,7 +315,7 @@ def plot_normalized_metrics(metrics_data, output_dir, target_lesion):
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     ax1.set_ylim(0, 1)
-    
+
     # Plot 2: Normalized Spatial Consistency
     ax2 = axes[1]
     for model_name, data in metrics_data.items():
@@ -287,7 +332,7 @@ def plot_normalized_metrics(metrics_data, output_dir, target_lesion):
                 normalized_spatial_cons = (spatial_cons - min_spatial_cons) / (max_spatial_cons - min_spatial_cons)
             else:
                 normalized_spatial_cons = np.ones_like(spatial_cons)
-            
+
             ax2.plot(data['round'], normalized_spatial_cons, marker='s', label=model_name, linewidth=2)
     ax2.set_title('Normalized Spatial Consistency')
     ax2.set_xlabel('Round')
@@ -295,7 +340,7 @@ def plot_normalized_metrics(metrics_data, output_dir, target_lesion):
     ax2.legend()
     ax2.grid(True, alpha=0.3)
     ax2.set_ylim(0, 1)
-    
+
     plt.tight_layout()
     output_path = os.path.join(output_dir, 'normalized_spatial_metrics_comparison.png')
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
@@ -305,10 +350,10 @@ def plot_normalized_metrics(metrics_data, output_dir, target_lesion):
 
 def print_summary(metrics_data):
     """Print summary statistics."""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("PERFORMANCE COMPARISON SUMMARY")
-    print("="*80)
-    
+    print("=" * 80)
+
     for model_name, data in metrics_data.items():
         print(f"\n📊 {model_name.upper()}:")
         print(f"   Final Validation Dice: {data['val_dice'][-1]:.4f}")
@@ -322,47 +367,63 @@ def print_summary(metrics_data):
 def main():
     """Main function for performance comparison."""
     args = parse_arguments()
-    
+
     # Load results first to get model names
     results = load_results(args.result_paths, args.max_models)
-    
+
     if not results:
         print("❌ No valid results found!")
         return
-    
-    # Create comparison directory based on model names
+
+    # Detect split type
+    if args.split_type:
+        split_type = args.split_type
+    else:
+        split_type = detect_split_type(args.result_paths)
+
+    if split_type == 'unknown':
+        print("⚠️  Warning: Could not detect split type from paths. Using default directory structure.")
+        split_type = 'unknown'
+
+    # Create comparison directory based on model names and split type
     model_names = sorted(results.keys())
     comparison_name = "_".join(model_names)
-    
-    # Create output directory
-    output_dir = os.path.join(args.output_dir, comparison_name)
+
+    # Create output directory with split type subdirectory
+    if split_type != 'unknown':
+        output_dir = os.path.join(args.output_dir, split_type, comparison_name)
+    else:
+        output_dir = os.path.join(args.output_dir, comparison_name)
+
     os.makedirs(output_dir, exist_ok=True)
-    
+
     print("🚀 Starting Active Learning Performance Comparison")
     print(f"📁 Output directory: {output_dir}")
     print(f"🎯 Target lesion: {args.target_lesion}")
+    print(f"📊 Split type: {split_type}")
     print(f"📊 Comparing {len(args.result_paths)} result files")
     print(f"📁 Comparison name: {comparison_name}")
-    
+
     print(f"\n✅ Successfully loaded results for {len(results)} models:")
     for model_name in results.keys():
         print(f"   - {model_name}")
-    
+
     # Extract metrics
     metrics_data = extract_metrics(results)
-    
+
     # Generate plots
     print("\n📊 Generating comparison plots...")
     plot_spatial_metrics(metrics_data, output_dir, args.target_lesion)
     plot_performance_coverage(metrics_data, output_dir, args.target_lesion)
     plot_combined_metrics(metrics_data, output_dir, args.target_lesion)
     plot_normalized_metrics(metrics_data, output_dir, args.target_lesion)
-    
+
     # Print summary
     print_summary(metrics_data)
-    
+
     print(f"\n🎉 Performance comparison completed!")
     print(f"📁 Results saved to: {output_dir}")
+    print(f"📊 Split type: {split_type}")
 
 
 if __name__ == "__main__":
