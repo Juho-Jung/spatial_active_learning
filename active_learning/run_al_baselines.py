@@ -57,6 +57,7 @@ def _parse_arguments():
                                  'adaptive', 'adaptive_improved',
                                  'adaptive_multi_scale', 'adaptive_performance_monitoring',
                                  'diversity', 'diversity_uncertainty',
+                                 'coreset',
                                  # ULTRA AGGRESSIVE versions
                                  'adaptive_ultra', 'adaptive_improved_ultra',
                                  'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra'],
@@ -255,7 +256,8 @@ def _create_model_for_training(args, device):
 
 def _calculate_uncertainties(args, model, full_dataset, pool_indices, selected_indices, device):
     """Calculate uncertainties for sample selection."""
-    if args.mode not in ['uncertainty', 'uncertainty_area', 'adaptive', 'adaptive_improved', 'adaptive_multi_scale', 'adaptive_performance_monitoring', 'diversity_uncertainty',
+    if args.mode not in ['uncertainty', 'uncertainty_area', 'adaptive', 'adaptive_improved', 'adaptive_multi_scale', 'adaptive_performance_monitoring', 'diversity', 'diversity_uncertainty',
+                         'coreset',
                          'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra']:
         return None
 
@@ -279,8 +281,8 @@ def _calculate_uncertainties(args, model, full_dataset, pool_indices, selected_i
             return uncertainty_func(model, temp_loader, device, return_detailed=True)
         else:
             return uncertainty_func(model, temp_loader, device, return_detailed=True)
-    elif args.mode in ['diversity', 'diversity_uncertainty']:
-        # For diversity modes, we need features
+    elif args.mode in ['diversity', 'diversity_uncertainty', 'coreset']:
+        # For diversity and coreset modes, we need features
         if args.uncertainty_type == 'mc_dropout':
             return uncertainty_func(model, temp_loader, device, args.mc_dropout_T, return_features=True)
         elif args.uncertainty_type == 'none':
@@ -341,6 +343,9 @@ def _select_samples(args, pool_indices, uncertainties, selected_indices, areas, 
         features = getattr(args, 'features', None)
         return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices, areas, features, first_round_seed)
     elif args.mode == 'diversity_uncertainty':
+        features = getattr(args, 'features', None)
+        return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices, areas, features, first_round_seed)
+    elif args.mode == 'coreset':
         features = getattr(args, 'features', None)
         return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices, areas, features, first_round_seed)
     elif args.mode == 'adaptive':
@@ -435,12 +440,13 @@ def _select_samples(args, pool_indices, uncertainties, selected_indices, areas, 
         raise ValueError(f"Unknown selection mode: {args.mode}")
 
 
-def _log_round_results(logger, round_idx, new_indices, selected_indices, val_loss, val_dice, val_bin_metrics):
+def _log_round_results(logger, round_idx, new_indices, selected_indices, val_loss, val_dice, val_iou, val_bin_metrics):
     """Log results for current round."""
-    print(f"✅ Round {round_idx + 1} completed - Val Loss: {val_loss:.4f}, Val Dice: {val_dice:.4f}")
+    print(f"✅ Round {round_idx + 1} completed - Val Loss: {val_loss:.4f}, Val Dice: {val_dice:.4f}, Val IoU: {val_iou:.4f}")
     print(
         f"   📊 Spatial Metrics - Worst Bin: {val_bin_metrics['worst_bin_dice']:.4f}, Perf Coverage: {val_bin_metrics['performance_coverage']:.4f}, Spatial Consistency: {val_bin_metrics['spatial_consistency']:.4f}")
-    logger.info(f"Round {round_idx + 1} completed - Val Loss: {val_loss:.4f}, Val Dice: {val_dice:.4f}")
+    logger.info(
+        f"Round {round_idx + 1} completed - Val Loss: {val_loss:.4f}, Val Dice: {val_dice:.4f}, Val IoU: {val_iou:.4f}")
     logger.info(
         f"Spatial Metrics - Worst Bin: {val_bin_metrics['worst_bin_dice']:.4f}, Perf Coverage: {val_bin_metrics['performance_coverage']:.4f}, Spatial Consistency: {val_bin_metrics['spatial_consistency']:.4f}")
 
@@ -475,6 +481,8 @@ def _log_final_results(logger, results, selected_indices, output_dir):
     logger.info("=" * 80)
     logger.info(f"Final validation Loss: {results[-1]['val_loss']:.4f}")
     logger.info(f"Final validation Dice: {results[-1]['val_dice']:.4f}")
+    if 'val_iou' in results[-1]:
+        logger.info(f"Final validation IoU: {results[-1]['val_iou']:.4f}")
     logger.info(f"Final spatial metrics:")
     logger.info(f"  Worst Bin Dice: {final_spatial['worst_bin_dice']:.4f}")
     logger.info(f"  P10 Bin Dice: {final_spatial['p10_bin_dice']:.4f}")
@@ -495,6 +503,8 @@ def _print_final_summary(args, results, selected_indices, output_dir):
     print(f"   Target lesion: {args.target_lesion}")
     print(f"   Final Val Loss: {results[-1]['val_loss']:.4f}")
     print(f"   Final Val Dice: {results[-1]['val_dice']:.4f}")
+    if 'val_iou' in results[-1]:
+        print(f"   Final Val IoU: {results[-1]['val_iou']:.4f}")
     print(f"   📊 Spatial Metrics:")
     print(f"     Worst Bin Dice: {final_spatial['worst_bin_dice']:.4f}")
     print(f"     P10 Bin Dice: {final_spatial['p10_bin_dice']:.4f}")
@@ -548,6 +558,7 @@ def main():
         uncertainties = None
         if args.mode in ['uncertainty', 'uncertainty_area', 'adaptive', 'adaptive_improved',
                          'adaptive_multi_scale', 'adaptive_performance_monitoring', 'diversity', 'diversity_uncertainty',
+                         'coreset',
                          'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra']:
             model = _create_model_for_uncertainty(args, device, previous_round_model_path)
             uncertainty_data = _calculate_uncertainties(
@@ -568,10 +579,10 @@ def main():
 
                 args.bin_id = _create_spatial_bins_for_dataset(full_dataset, pool_indices, args)
                 args.lambda1 = getattr(args, 'lambda1', 1.0)  # Default lambda1 value
-            elif args.mode in ['diversity', 'diversity_uncertainty'] and isinstance(uncertainty_data, dict):
-                # Extract uncertainties and features for diversity selection
+            elif args.mode in ['diversity', 'diversity_uncertainty', 'coreset'] and isinstance(uncertainty_data, dict):
+                # Extract uncertainties and features for diversity/coreset selection
                 uncertainties = uncertainty_data['uncertainties']
-                args.features = uncertainty_data['features']  # Feature embeddings for diversity
+                args.features = uncertainty_data['features']  # Feature embeddings for diversity/coreset
             else:
                 uncertainties = uncertainty_data
 
@@ -590,7 +601,7 @@ def main():
         model = _create_model_for_training(args, device)
 
         print("🏋️ Training model...")
-        val_loss, val_dice, val_bin_metrics, current_bin_dices, round_model_save_path = train_model_round(
+        val_loss, val_dice, val_iou, val_bin_metrics, current_bin_dices, round_model_save_path = train_model_round(
             model, train_dataset, val_dataset, device, args.train_epochs, args.batch_size,
             round_idx + 1, output_dir, args.patience, args.min_delta, prev_bin_dices,
             args.grid_width, args.grid_height, args.uncertainty_type)
@@ -601,11 +612,13 @@ def main():
                         'total_selected': len(selected_indices),
                         'val_loss': float(val_loss),
                         'val_dice': float(val_dice),
+                        'val_iou': float(val_iou),
                         'spatial_metrics': {key: float(val) for key, val in val_bin_metrics.items()}}
         results.append(round_result)
 
         # Log round results
-        _log_round_results(logger, round_idx, new_indices, selected_indices, val_loss, val_dice, val_bin_metrics)
+        _log_round_results(logger, round_idx, new_indices, selected_indices,
+                           val_loss, val_dice, val_iou, val_bin_metrics)
 
         # Update for next round
         prev_bin_dices = current_bin_dices

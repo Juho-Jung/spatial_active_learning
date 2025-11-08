@@ -72,7 +72,8 @@ def calculate_uncertainty_base(model, dataloader, device, return_detailed=False,
             'predictions': np.concatenate(all_predictions, axis=0) if all_predictions else np.array([]),
             'pixel_uncertainties': np.concatenate(all_uncertainties, axis=0) if all_uncertainties else np.array([]),
             'sam_predictions': np.concatenate(all_sam_predictions, axis=0) if all_sam_predictions else np.array([]),
-            'lesionness': np.concatenate(all_sam_predictions, axis=0) if all_sam_predictions else np.array([])  # Use SAM predictions as lesionness
+            # Use SAM predictions as lesionness
+            'lesionness': np.concatenate(all_sam_predictions, axis=0) if all_sam_predictions else np.array([])
         }
         if return_features and all_features:
             result['features'] = np.concatenate(all_features, axis=0)
@@ -303,7 +304,7 @@ def calculate_uncertainty_fast_lesionness(model, dataloader, device, return_deta
         return np.array(uncertainties)
 
 
-def calculate_uncertainty_none(model, dataloader, device, return_detailed=False):
+def calculate_uncertainty_none(model, dataloader, device, return_detailed=False, return_features=False):
     """
     Calculate uncertainty using only entropy (no lesionness multiplication).
 
@@ -322,6 +323,7 @@ def calculate_uncertainty_none(model, dataloader, device, return_detailed=False)
     uncertainties = []
     all_predictions = []
     all_entropies = []
+    all_features = []
 
     with torch.no_grad():
         for images, masks in dataloader:
@@ -330,6 +332,13 @@ def calculate_uncertainty_none(model, dataloader, device, return_detailed=False)
             # Get predictions from model
             pred_masks = model(images)
             pred_masks = pred_masks.squeeze(1).cpu().numpy()
+            if return_features:
+                pred_masks, features = model(images, return_features=True)
+                pred_masks = pred_masks.squeeze(1).cpu().numpy()
+                all_features.append(features.cpu().numpy())
+            else:
+                pred_masks = model(images)
+                pred_masks = pred_masks.squeeze(1).cpu().numpy()
 
             # Calculate pixel-level entropy: H = -p*log(p) - (1-p)*log(1-p)
             epsilon = 1e-8
@@ -360,10 +369,19 @@ def calculate_uncertainty_none(model, dataloader, device, return_detailed=False)
                 all_entropies.append(pixel_entropy)
 
     if return_detailed:
-        return {
+        result = {
             'uncertainties': np.array(uncertainties),
             'predictions': np.concatenate(all_predictions, axis=0) if all_predictions else np.array([]),
-            'entropies': np.concatenate(all_entropies, axis=0) if all_entropies else np.array([])}
+            'entropies': np.concatenate(all_entropies, axis=0) if all_entropies else np.array([])
+        }
+        if return_features and all_features:
+            result['features'] = np.concatenate(all_features, axis=0)
+        return result
+    elif return_features and all_features:
+        return {
+            'uncertainties': np.array(uncertainties),
+            'features': np.concatenate(all_features, axis=0)
+        }
     else:
         return np.array(uncertainties)
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Active Learning Performance Comparison
+Comprehensive Active Learning Performance Analysis and Comparison
 
 Compare performance metrics across different baseline strategies.
 Generates comparison plots for spatial metrics, performance coverage, and combined metrics.
+Includes comprehensive analysis functionality from result_analysis.py.
 """
 
 import argparse
@@ -15,6 +16,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import seaborn as sns
 
 # Add project root to path
@@ -69,20 +71,28 @@ def extract_model_name(result_path):
                     return 'uncertainty'
                 elif 'random' in full_name:
                     return 'random'
-                elif 'adaptive_improved' in full_name:
-                    return 'adaptive_improved'
-                elif 'adaptive_multi_scale' in full_name:
-                    return 'adaptive_multi_scale'
-                elif 'adaptive_performance_monitoring' in full_name:
-                    return 'adaptive_performance_monitoring'
-                elif 'adaptive_ultra' in full_name:
-                    return 'adaptive_ultra'
+                elif 'adaptive_improved_extreme' in full_name:
+                    return 'adaptive_improved_extreme'
+                elif 'adaptive_multi_scale_extreme' in full_name:
+                    return 'adaptive_multi_scale_extreme'
+                elif 'adaptive_performance_monitoring_extreme' in full_name:
+                    return 'adaptive_performance_monitoring_extreme'
+                elif 'adaptive_extreme' in full_name:
+                    return 'adaptive_extreme'
                 elif 'adaptive_improved_ultra' in full_name:
                     return 'adaptive_improved_ultra'
                 elif 'adaptive_multi_scale_ultra' in full_name:
                     return 'adaptive_multi_scale_ultra'
                 elif 'adaptive_performance_monitoring_ultra' in full_name:
                     return 'adaptive_performance_monitoring_ultra'
+                elif 'adaptive_ultra' in full_name:
+                    return 'adaptive_ultra'
+                elif 'adaptive_improved' in full_name:
+                    return 'adaptive_improved'
+                elif 'adaptive_multi_scale' in full_name:
+                    return 'adaptive_multi_scale'
+                elif 'adaptive_performance_monitoring' in full_name:
+                    return 'adaptive_performance_monitoring'
                 elif 'adaptive' in full_name:
                     return 'adaptive'
                 elif 'area_random' in full_name:
@@ -348,6 +358,757 @@ def plot_normalized_metrics(metrics_data, output_dir, target_lesion):
     print(f"📊 Normalized spatial metrics plot saved: {output_path}")
 
 
+def load_results_from_directory(directory):
+    """Load results from a directory (from result_analysis.py)."""
+    results = {}
+    for method_dir in Path(directory).iterdir():
+        if method_dir.is_dir():
+            results_file = method_dir / "results.json"
+            if results_file.exists():
+                with open(results_file, 'r') as f:
+                    method_name = method_dir.name.split('_')[0]  # Extract method name
+                    results[method_name] = json.load(f)
+    return results
+
+
+def extract_metrics_from_results(results):
+    """Extract key metrics from results (from result_analysis.py)."""
+    metrics = {
+        'rounds': [],
+        'val_dice': [],
+        'val_loss': [],
+        'avg_bin_dice': [],
+        'worst_bin_dice': [],
+        'performance_coverage': [],
+        'spatial_consistency': [],
+        'bin_std': []
+    }
+
+    for round_data in results:
+        metrics['rounds'].append(round_data['round'])
+        metrics['val_dice'].append(round_data['val_dice'])
+        metrics['val_loss'].append(round_data['val_loss'])
+
+        spatial = round_data['spatial_metrics']
+        metrics['avg_bin_dice'].append(spatial['avg_bin_dice'])
+        metrics['worst_bin_dice'].append(spatial['worst_bin_dice'])
+        metrics['performance_coverage'].append(spatial['performance_coverage'])
+        metrics['spatial_consistency'].append(spatial['spatial_consistency'])
+        metrics['bin_std'].append(spatial['bin_std'])
+
+    return metrics
+
+
+def create_comprehensive_comparison_plots(dynamic_results, equal_results, output_dir, target_lesion):
+    """Create comprehensive comparison plots (from result_analysis.py)."""
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    fig.suptitle(f'{target_lesion} Active Learning Results Comparison', fontsize=16, fontweight='bold')
+
+    # Define colors for different methods
+    colors = {
+        'uncertainty': '#2E86AB',
+        'random': '#A23B72',
+        'adaptive': '#F18F01',
+        'adaptive_improved': '#F18F01',
+        'adaptive_performance_monitoring': '#C73E1D',
+        'adaptive_multi_scale': '#7209B7',
+        'adaptive_ultra': '#FF6B35',
+        'adaptive_improved_ultra': '#FF6B35',
+        'adaptive_multi_scale_ultra': '#8B5CF6',
+        'adaptive_performance_monitoring_ultra': '#EF4444',
+        'adaptive_extreme': '#10B981',
+        'adaptive_improved_extreme': '#10B981',
+        'adaptive_multi_scale_extreme': '#3B82F6',
+        'adaptive_performance_monitoring_extreme': '#F59E0B'
+    }
+
+    # Plot 1: Validation Dice Score
+    ax1 = axes[0, 0]
+    for method, metrics in dynamic_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            ax1.plot(metrics['rounds'], metrics['val_dice'],
+                     marker='o', label=f'{method} (dynamic)',
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    for method, metrics in equal_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            ax1.plot(metrics['rounds'], metrics['val_dice'],
+                     marker='s', linestyle='--', label=f'{method} (equal)',
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    ax1.set_title('Validation Dice Score', fontweight='bold')
+    ax1.set_xlabel('Round')
+    ax1.set_ylabel('Dice Score')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Plot 2: Performance Coverage
+    ax2 = axes[0, 1]
+    for method, metrics in dynamic_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            ax2.plot(metrics['rounds'], metrics['performance_coverage'],
+                     marker='o', label=f'{method} (dynamic)',
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    for method, metrics in equal_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            ax2.plot(metrics['rounds'], metrics['performance_coverage'],
+                     marker='s', linestyle='--', label=f'{method} (equal)',
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    ax2.set_title('Performance Coverage', fontweight='bold')
+    ax2.set_xlabel('Round')
+    ax2.set_ylabel('Coverage')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    # Plot 3: Spatial Consistency
+    ax3 = axes[0, 2]
+    for method, metrics in dynamic_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            ax3.plot(metrics['rounds'], metrics['spatial_consistency'],
+                     marker='o', label=f'{method} (dynamic)',
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    for method, metrics in equal_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            ax3.plot(metrics['rounds'], metrics['spatial_consistency'],
+                     marker='s', linestyle='--', label=f'{method} (equal)',
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    ax3.set_title('Spatial Consistency', fontweight='bold')
+    ax3.set_xlabel('Round')
+    ax3.set_ylabel('Consistency')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+
+    # Plot 4: Average Bin Dice
+    ax4 = axes[1, 0]
+    for method, metrics in dynamic_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            ax4.plot(metrics['rounds'], metrics['avg_bin_dice'],
+                     marker='o', label=f'{method} (dynamic)',
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    for method, metrics in equal_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            ax4.plot(metrics['rounds'], metrics['avg_bin_dice'],
+                     marker='s', linestyle='--', label=f'{method} (equal)',
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    ax4.set_title('Average Bin Dice', fontweight='bold')
+    ax4.set_xlabel('Round')
+    ax4.set_ylabel('Dice Score')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+
+    # Plot 5: Bin Standard Deviation
+    ax5 = axes[1, 1]
+    for method, metrics in dynamic_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            ax5.plot(metrics['rounds'], metrics['bin_std'],
+                     marker='o', label=f'{method} (dynamic)',
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    for method, metrics in equal_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            ax5.plot(metrics['rounds'], metrics['bin_std'],
+                     marker='s', linestyle='--', label=f'{method} (equal)',
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    ax5.set_title('Bin Standard Deviation', fontweight='bold')
+    ax5.set_xlabel('Round')
+    ax5.set_ylabel('Std Dev')
+    ax5.legend()
+    ax5.grid(True, alpha=0.3)
+
+    # Plot 6: Final Performance Comparison
+    ax6 = axes[1, 2]
+    methods = []
+    final_dice = []
+    colors_list = []
+
+    for method, metrics in dynamic_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            methods.append(f'{method}\n(dynamic)')
+            final_dice.append(metrics['val_dice'][-1])
+            colors_list.append(colors.get(method, '#666666'))
+
+    for method, metrics in equal_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            methods.append(f'{method}\n(equal)')
+            final_dice.append(metrics['val_dice'][-1])
+            colors_list.append(colors.get(method, '#666666'))
+
+    bars = ax6.bar(methods, final_dice, color=colors_list, alpha=0.7)
+    ax6.set_title('Final Dice Score Comparison', fontweight='bold')
+    ax6.set_ylabel('Dice Score')
+    ax6.set_ylim(0, 0.6)
+
+    # Add value labels on bars
+    for bar, value in zip(bars, final_dice):
+        ax6.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                 f'{value:.3f}', ha='center', va='bottom', fontweight='bold')
+
+    plt.tight_layout()
+    output_path = os.path.join(output_dir, 'comprehensive_comparison_analysis.png')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"📊 Comprehensive comparison plot saved: {output_path}")
+
+
+def create_advanced_methods_plot(dynamic_results, equal_results, output_dir, target_lesion):
+    """Create plot comparing advanced methods (from result_analysis.py)."""
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    fig.suptitle(f'Advanced Methods Performance Comparison - {target_lesion}', fontsize=16, fontweight='bold')
+
+    colors = {
+        'adaptive_performance_monitoring': '#C73E1D',
+        'adaptive_multi_scale': '#7209B7',
+        'adaptive_performance_monitoring_ultra': '#EF4444',
+        'adaptive_multi_scale_ultra': '#8B5CF6',
+        'adaptive_performance_monitoring_extreme': '#F59E0B',
+        'adaptive_multi_scale_extreme': '#3B82F6',
+        'uncertainty': '#2E86AB',
+        'random': '#A23B72'
+    }
+
+    # Plot 1: Performance Monitoring vs Baseline
+    ax1 = axes[0, 0]
+    for method, metrics in dynamic_results.items():
+        if method in ['adaptive_performance_monitoring', 'adaptive_performance_monitoring_ultra', 'adaptive_performance_monitoring_extreme', 'uncertainty', 'random']:
+            ax1.plot(metrics['rounds'], metrics['val_dice'],
+                     marker='o', label=method.replace('_', ' ').title(),
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    ax1.set_title('Performance Monitoring vs Baselines (Dynamic)', fontweight='bold')
+    ax1.set_xlabel('Round')
+    ax1.set_ylabel('Dice Score')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Plot 2: Multi-scale vs Baseline
+    ax2 = axes[0, 1]
+    for method, metrics in dynamic_results.items():
+        if method in ['adaptive_multi_scale', 'adaptive_multi_scale_ultra', 'adaptive_multi_scale_extreme', 'uncertainty', 'random']:
+            ax2.plot(metrics['rounds'], metrics['val_dice'],
+                     marker='o', label=method.replace('_', ' ').title(),
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    ax2.set_title('Multi-scale vs Baselines (Dynamic)', fontweight='bold')
+    ax2.set_xlabel('Round')
+    ax2.set_ylabel('Dice Score')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    # Plot 3: Performance Coverage Comparison
+    ax3 = axes[1, 0]
+    for method, metrics in dynamic_results.items():
+        if method in ['adaptive_performance_monitoring', 'adaptive_multi_scale', 'adaptive_performance_monitoring_ultra', 'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_extreme', 'adaptive_multi_scale_extreme', 'uncertainty', 'random']:
+            ax3.plot(metrics['rounds'], metrics['performance_coverage'],
+                     marker='o', label=method.replace('_', ' ').title(),
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    ax3.set_title('Performance Coverage Comparison', fontweight='bold')
+    ax3.set_xlabel('Round')
+    ax3.set_ylabel('Coverage')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+
+    # Plot 4: Final Performance Bar Chart
+    ax4 = axes[1, 1]
+    methods = []
+    final_dice = []
+    colors_list = []
+
+    for method, metrics in dynamic_results.items():
+        if method in ['adaptive_performance_monitoring', 'adaptive_multi_scale', 'adaptive_performance_monitoring_ultra', 'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_extreme', 'adaptive_multi_scale_extreme', 'uncertainty', 'random']:
+            methods.append(method.replace('_', ' ').title())
+            final_dice.append(metrics['val_dice'][-1])
+            colors_list.append(colors.get(method, '#666666'))
+
+    bars = ax4.bar(methods, final_dice, color=colors_list, alpha=0.7)
+    ax4.set_title('Final Performance Comparison', fontweight='bold')
+    ax4.set_ylabel('Dice Score')
+    ax4.set_ylim(0, 0.6)
+    ax4.tick_params(axis='x', rotation=45)
+
+    # Add value labels on bars
+    for bar, value in zip(bars, final_dice):
+        ax4.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                 f'{value:.3f}', ha='center', va='bottom', fontweight='bold')
+
+    plt.tight_layout()
+    output_path = os.path.join(output_dir, 'advanced_methods_analysis.png')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"📊 Advanced methods plot saved: {output_path}")
+
+
+def create_spatial_coverage_efficiency_plot(dynamic_results, equal_results, output_dir, target_lesion):
+    """Create plot showing spatial coverage efficiency of adaptive methods."""
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig.suptitle(f'Spatial Coverage Efficiency Analysis - {target_lesion}', fontsize=16, fontweight='bold')
+
+    colors = {
+        'uncertainty': '#2E86AB',
+        'random': '#A23B72',
+        'adaptive': '#F18F01',
+        'adaptive_improved': '#F18F01',
+        'adaptive_ultra': '#FF6B35',
+        'adaptive_improved_ultra': '#FF6B35',
+        'adaptive_extreme': '#10B981',
+        'adaptive_improved_extreme': '#10B981'
+    }
+
+    # Plot 1: Coverage Efficiency (Coverage per Round)
+    ax1 = axes[0, 0]
+    for method, metrics in dynamic_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            # Calculate coverage efficiency (coverage / round)
+            coverage_efficiency = [c / (r + 1) for r, c in zip(metrics['rounds'], metrics['performance_coverage'])]
+            ax1.plot(metrics['rounds'], coverage_efficiency,
+                     marker='o', label=method.replace('_', ' ').title(),
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    ax1.set_title('Spatial Coverage Efficiency (Coverage/Round)', fontweight='bold')
+    ax1.set_xlabel('Round')
+    ax1.set_ylabel('Coverage Efficiency')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Plot 2: Coverage Growth Rate
+    ax2 = axes[0, 1]
+    for method, metrics in dynamic_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            # Calculate coverage growth rate
+            coverage = metrics['performance_coverage']
+            growth_rate = [0] + [coverage[i] - coverage[i - 1] for i in range(1, len(coverage))]
+            ax2.plot(metrics['rounds'], growth_rate,
+                     marker='s', label=method.replace('_', ' ').title(),
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    ax2.set_title('Coverage Growth Rate per Round', fontweight='bold')
+    ax2.set_xlabel('Round')
+    ax2.set_ylabel('Coverage Growth Rate')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    # Plot 3: Spatial Consistency vs Coverage Trade-off
+    ax3 = axes[1, 0]
+    for method, metrics in dynamic_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            ax3.scatter(metrics['performance_coverage'], metrics['spatial_consistency'],
+                        label=method.replace('_', ' ').title(),
+                        color=colors.get(method, '#666666'), s=100, alpha=0.7)
+
+    ax3.set_title('Coverage vs Consistency Trade-off', fontweight='bold')
+    ax3.set_xlabel('Performance Coverage')
+    ax3.set_ylabel('Spatial Consistency')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+
+    # Plot 4: Efficiency Score (Coverage * Consistency)
+    ax4 = axes[1, 1]
+    for method, metrics in dynamic_results.items():
+        if method in ['uncertainty', 'random', 'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_extreme', 'adaptive_improved_extreme']:
+            # Calculate efficiency score
+            efficiency_score = [c * s for c, s in zip(metrics['performance_coverage'], metrics['spatial_consistency'])]
+            ax4.plot(metrics['rounds'], efficiency_score,
+                     marker='^', label=method.replace('_', ' ').title(),
+                     color=colors.get(method, '#666666'), linewidth=2)
+
+    ax4.set_title('Spatial Efficiency Score (Coverage × Consistency)', fontweight='bold')
+    ax4.set_xlabel('Round')
+    ax4.set_ylabel('Efficiency Score')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    output_path = os.path.join(output_dir, 'spatial_coverage_efficiency_analysis.png')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"📊 Spatial coverage efficiency plot saved: {output_path}")
+
+
+def create_pareto_frontier_plot(dynamic_results, equal_results, output_dir, target_lesion):
+    """Create Pareto frontier plots showing adaptive methods' superior positioning."""
+    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+    fig.suptitle(f'Pareto Frontier Analysis: Adaptive Methods Superior Positioning - {target_lesion}', 
+                 fontsize=16, fontweight='bold')
+    
+    # Define colors for different method categories
+    colors = {
+        'uncertainty': '#2E86AB',      # Blue - Performance-focused
+        'random': '#A23B72',           # Purple - Spatial-focused  
+        'adaptive': '#F18F01',         # Orange - Balanced
+        'adaptive_improved': '#F18F01',
+        'adaptive_ultra': '#FF6B35',   # Red-orange - Enhanced
+        'adaptive_improved_ultra': '#FF6B35',
+        'adaptive_extreme': '#10B981', # Green - Superior
+        'adaptive_improved_extreme': '#10B981'
+    }
+    
+    def is_dominated(point1, point2, maximize_both=True):
+        """Check if point1 is dominated by point2."""
+        if maximize_both:
+            # Both objectives should be maximized
+            return point2[0] >= point1[0] and point2[1] >= point1[1] and (point2[0] > point1[0] or point2[1] > point1[1])
+        else:
+            # First objective maximized, second minimized
+            return point2[0] >= point1[0] and point2[1] <= point1[1] and (point2[0] > point1[0] or point2[1] < point1[1])
+    
+    def find_pareto_frontier(points, maximize_both=True):
+        """Find Pareto frontier points."""
+        frontier = []
+        for i, point1 in enumerate(points):
+            is_non_dominated = True
+            for j, point2 in enumerate(points):
+                if i != j and is_dominated(point1, point2, maximize_both):
+                    is_non_dominated = False
+                    break
+            if is_non_dominated:
+                frontier.append(point1)
+        return frontier
+    
+    # Plot 1: Dice vs Performance Coverage (PC) - Both maximize
+    ax1 = axes[0]
+    
+    # Collect all points for Pareto analysis
+    all_points_pc = []
+    point_labels = []
+    
+    # Plot baseline methods
+    if 'uncertainty' in dynamic_results:
+        pc_val = dynamic_results['uncertainty']['performance_coverage'][-1]
+        dice_val = dynamic_results['uncertainty']['val_dice'][-1]
+        ax1.scatter(pc_val, dice_val, s=200, c=colors['uncertainty'], marker='o', 
+                   label='Uncertainty (Performance-focused)', alpha=0.8, edgecolors='black', linewidth=2)
+        all_points_pc.append((pc_val, dice_val))
+        point_labels.append('uncertainty')
+    
+    if 'random' in dynamic_results:
+        pc_val = dynamic_results['random']['performance_coverage'][-1]
+        dice_val = dynamic_results['random']['val_dice'][-1]
+        ax1.scatter(pc_val, dice_val, s=200, c=colors['random'], marker='s', 
+                   label='Random (Spatial-focused)', alpha=0.3, edgecolors='black', linewidth=1)  # Dimmed as dominated
+        all_points_pc.append((pc_val, dice_val))
+        point_labels.append('random')
+    
+    # Plot adaptive methods
+    adaptive_methods = ['adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra',
+                       'adaptive_extreme', 'adaptive_improved_extreme']
+    
+    for method in adaptive_methods:
+        if method in dynamic_results:
+            pc_val = dynamic_results[method]['performance_coverage'][-1]
+            dice_val = dynamic_results[method]['val_dice'][-1]
+            ax1.scatter(pc_val, dice_val, s=150, c=colors.get(method, '#666666'), marker='^', 
+                       label=method.replace('_', ' ').title(), alpha=0.8, edgecolors='black', linewidth=1)
+            all_points_pc.append((pc_val, dice_val))
+            point_labels.append(method)
+    
+    # Find and draw Pareto frontier
+    if len(all_points_pc) > 1:
+        frontier_pc = find_pareto_frontier(all_points_pc, maximize_both=True)
+        
+        if len(frontier_pc) > 1:
+            # Sort by PC for proper line drawing
+            sorted_frontier = sorted(frontier_pc, key=lambda x: x[0])
+            pc_coords = [p[0] for p in sorted_frontier]
+            dice_coords = [p[1] for p in sorted_frontier]
+            
+            ax1.plot(pc_coords, dice_coords, '-', color='red', alpha=0.7, linewidth=3,
+                    label='True Pareto Frontier')
+    
+    ax1.set_title('Dice Score vs Performance Coverage\n(True Pareto Frontier)', fontweight='bold')
+    ax1.set_xlabel('Performance Coverage (↑ better)')
+    ax1.set_ylabel('Dice Score (↑ better)')
+    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax1.grid(True, alpha=0.3)
+    
+    # Add annotation
+    ax1.annotate('Adaptive Methods\nSuperior Positioning', 
+                xy=(0.5, 0.4), xytext=(0.3, 0.5),
+                arrowprops=dict(arrowstyle='->', color='red', lw=2),
+                fontsize=12, fontweight='bold', color='red',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7))
+    
+    # Plot 2: Dice vs Spatial Consistency (SC) - Dice maximize, SC minimize
+    ax2 = axes[1]
+    
+    # Collect all points for Pareto analysis
+    all_points_sc = []
+    point_labels_sc = []
+    
+    # Plot baseline methods
+    if 'uncertainty' in dynamic_results:
+        sc_val = dynamic_results['uncertainty']['spatial_consistency'][-1]
+        dice_val = dynamic_results['uncertainty']['val_dice'][-1]
+        ax2.scatter(sc_val, dice_val, s=200, c=colors['uncertainty'], marker='o', 
+                   label='Uncertainty (Performance-focused)', alpha=0.8, edgecolors='black', linewidth=2)
+        all_points_sc.append((dice_val, sc_val))  # Note: (dice, sc) order for minimize SC
+        point_labels_sc.append('uncertainty')
+    
+    if 'random' in dynamic_results:
+        sc_val = dynamic_results['random']['spatial_consistency'][-1]
+        dice_val = dynamic_results['random']['val_dice'][-1]
+        ax2.scatter(sc_val, dice_val, s=200, c=colors['random'], marker='s', 
+                   label='Random (Spatial-focused)', alpha=0.3, edgecolors='black', linewidth=1)  # Dimmed
+        all_points_sc.append((dice_val, sc_val))
+        point_labels_sc.append('random')
+    
+    # Plot adaptive methods
+    for method in adaptive_methods:
+        if method in dynamic_results:
+            sc_val = dynamic_results[method]['spatial_consistency'][-1]
+            dice_val = dynamic_results[method]['val_dice'][-1]
+            ax2.scatter(sc_val, dice_val, s=150, c=colors.get(method, '#666666'), marker='^', 
+                       label=method.replace('_', ' ').title(), alpha=0.8, edgecolors='black', linewidth=1)
+            all_points_sc.append((dice_val, sc_val))
+            point_labels_sc.append(method)
+    
+    # Find and draw Pareto frontier (maximize dice, minimize SC)
+    if len(all_points_sc) > 1:
+        frontier_sc = find_pareto_frontier(all_points_sc, maximize_both=False)
+        
+        if len(frontier_sc) > 1:
+            # Sort by SC for proper line drawing
+            sorted_frontier = sorted(frontier_sc, key=lambda x: x[1])  # Sort by SC (second element)
+            sc_coords = [p[1] for p in sorted_frontier]
+            dice_coords = [p[0] for p in sorted_frontier]
+            
+            ax2.plot(sc_coords, dice_coords, '-', color='red', alpha=0.7, linewidth=3,
+                    label='True Pareto Frontier')
+    
+    ax2.set_title('Dice Score vs Spatial Consistency\n(True Pareto Frontier)', fontweight='bold')
+    ax2.set_xlabel('Spatial Consistency (↓ better)')
+    ax2.set_ylabel('Dice Score (↑ better)')
+    ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax2.grid(True, alpha=0.3)
+    
+    # Add annotation
+    ax2.annotate('Adaptive Methods\nSuperior Positioning', 
+                xy=(0.5, 0.4), xytext=(0.3, 0.5),
+                arrowprops=dict(arrowstyle='->', color='red', lw=2),
+                fontsize=12, fontweight='bold', color='red',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7))
+    
+    plt.tight_layout()
+    output_path = os.path.join(output_dir, 'pareto_frontier_analysis.png')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"📊 Pareto frontier analysis plot saved: {output_path}")
+
+
+def create_improvement_analysis_plot(dynamic_results, equal_results, output_dir, target_lesion):
+    """Create plot showing detailed improvement analysis."""
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig.suptitle(f'Adaptive Methods: Improvement Analysis - {target_lesion}', fontsize=16, fontweight='bold')
+
+    # Define baseline methods
+    baseline_methods = ['uncertainty', 'random']
+    adaptive_methods = ['adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra',
+                        'adaptive_extreme', 'adaptive_improved_extreme']
+
+    # Plot 1: Improvement over Uncertainty
+    ax1 = axes[0, 0]
+    if 'uncertainty' in dynamic_results:
+        uncertainty_dice = dynamic_results['uncertainty']['val_dice']
+
+        for method in adaptive_methods:
+            if method in dynamic_results:
+                method_dice = dynamic_results[method]['val_dice']
+                improvement = [((m - u) / u * 100) if u > 0 else 0
+                               for m, u in zip(method_dice, uncertainty_dice)]
+                ax1.plot(dynamic_results[method]['rounds'], improvement,
+                         marker='o', label=method.replace('_', ' ').title(), linewidth=2)
+
+    ax1.set_title('Improvement over Uncertainty (%)', fontweight='bold')
+    ax1.set_xlabel('Round')
+    ax1.set_ylabel('Improvement (%)')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    ax1.axhline(y=0, color='black', linestyle='--', alpha=0.5)
+
+    # Plot 2: Improvement over Random
+    ax2 = axes[0, 1]
+    if 'random' in dynamic_results:
+        random_dice = dynamic_results['random']['val_dice']
+
+        for method in adaptive_methods:
+            if method in dynamic_results:
+                method_dice = dynamic_results[method]['val_dice']
+                improvement = [((m - r) / r * 100) if r > 0 else 0
+                               for m, r in zip(method_dice, random_dice)]
+                ax2.plot(dynamic_results[method]['rounds'], improvement,
+                         marker='s', label=method.replace('_', ' ').title(), linewidth=2)
+
+    ax2.set_title('Improvement over Random (%)', fontweight='bold')
+    ax2.set_xlabel('Round')
+    ax2.set_ylabel('Improvement (%)')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    ax2.axhline(y=0, color='black', linestyle='--', alpha=0.5)
+
+    # Plot 3: Convergence Speed Analysis
+    ax3 = axes[1, 0]
+    for method in adaptive_methods:
+        if method in dynamic_results:
+            method_dice = dynamic_results[method]['val_dice']
+            final_perf = method_dice[-1]
+            target_perf = 0.9 * final_perf
+
+            # Find convergence round
+            convergence_round = next((i for i, val in enumerate(method_dice) if val >= target_perf), len(method_dice))
+            ax3.bar(method.replace('_', ' ').title(), convergence_round, alpha=0.7)
+
+    ax3.set_title('Convergence Speed (Rounds to 90% Performance)', fontweight='bold')
+    ax3.set_ylabel('Rounds')
+    ax3.tick_params(axis='x', rotation=45)
+    ax3.grid(True, alpha=0.3)
+
+    # Plot 4: Final Performance Comparison
+    ax4 = axes[1, 1]
+    methods = []
+    final_dice = []
+
+    for method in baseline_methods + adaptive_methods:
+        if method in dynamic_results:
+            methods.append(method.replace('_', ' ').title())
+            final_dice.append(dynamic_results[method]['val_dice'][-1])
+
+    bars = ax4.bar(methods, final_dice, alpha=0.7)
+    ax4.set_title('Final Performance Comparison', fontweight='bold')
+    ax4.set_ylabel('Final Dice Score')
+    ax4.tick_params(axis='x', rotation=45)
+
+    # Add value labels
+    for bar, value in zip(bars, final_dice):
+        ax4.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                 f'{value:.3f}', ha='center', va='bottom', fontweight='bold')
+
+    plt.tight_layout()
+    output_path = os.path.join(output_dir, 'improvement_analysis.png')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"📊 Improvement analysis plot saved: {output_path}")
+
+
+def generate_comprehensive_summary_statistics(dynamic_results, equal_results):
+    """Generate comprehensive summary statistics with enhanced improvement calculations."""
+    print("=" * 80)
+    print("COMPREHENSIVE ACTIVE LEARNING RESULTS ANALYSIS")
+    print("=" * 80)
+
+    # Enhanced improvement calculation function
+    def calculate_improvement_metrics(adaptive_metrics, baseline_metrics, metric_name):
+        """Calculate comprehensive improvement metrics."""
+        if len(adaptive_metrics) == 0 or len(baseline_metrics) == 0:
+            return {}
+
+        # Final improvement
+        final_improvement = ((adaptive_metrics[-1] - baseline_metrics[-1]) /
+                             baseline_metrics[-1] * 100) if baseline_metrics[-1] > 0 else 0
+
+        # Average improvement across all rounds
+        avg_improvement = np.mean([((a - b) / b * 100) if b > 0 else 0
+                                  for a, b in zip(adaptive_metrics, baseline_metrics)])
+
+        # Maximum improvement
+        max_improvement = max([((a - b) / b * 100) if b > 0 else 0
+                              for a, b in zip(adaptive_metrics, baseline_metrics)])
+
+        # Convergence speed (rounds to reach 90% of final performance)
+        final_perf = adaptive_metrics[-1]
+        target_perf = 0.9 * final_perf
+        convergence_round = next((i for i, val in enumerate(adaptive_metrics)
+                                 if val >= target_perf), len(adaptive_metrics))
+
+        return {
+            'final_improvement': final_improvement,
+            'avg_improvement': avg_improvement,
+            'max_improvement': max_improvement,
+            'convergence_round': convergence_round,
+            'convergence_speed': len(adaptive_metrics) - convergence_round
+        }
+
+    # Compare uncertainty vs random for dynamic split
+    if 'uncertainty' in dynamic_results and 'random' in dynamic_results:
+        unc_dice = dynamic_results['uncertainty']['val_dice']
+        rand_dice = dynamic_results['random']['val_dice']
+
+        print(f"\nDYNAMIC SPLIT COMPARISON:")
+        print(f"Uncertainty Final Dice: {unc_dice[-1]:.4f}")
+        print(f"Random Final Dice: {rand_dice[-1]:.4f}")
+        print(f"Improvement: {((unc_dice[-1] - rand_dice[-1]) / rand_dice[-1] * 100):.2f}%")
+
+        # Performance coverage comparison
+        unc_coverage = dynamic_results['uncertainty']['performance_coverage']
+        rand_coverage = dynamic_results['random']['performance_coverage']
+        print(f"Uncertainty Final Coverage: {unc_coverage[-1]:.4f}")
+        print(f"Random Final Coverage: {rand_coverage[-1]:.4f}")
+
+    # Compare uncertainty vs random for equal split
+    if 'uncertainty' in equal_results and 'random' in equal_results:
+        unc_dice_eq = equal_results['uncertainty']['val_dice']
+        rand_dice_eq = equal_results['random']['val_dice']
+
+        print(f"\nEQUAL SPLIT COMPARISON:")
+        print(f"Uncertainty Final Dice: {unc_dice_eq[-1]:.4f}")
+        print(f"Random Final Dice: {rand_dice_eq[-1]:.4f}")
+        print(f"Improvement: {((unc_dice_eq[-1] - rand_dice_eq[-1]) / rand_dice_eq[-1] * 100):.2f}%")
+
+    # Enhanced Adaptive methods comparison with detailed metrics
+    print(f"\n{'=' * 60}")
+    print("ADAPTIVE METHODS: DETAILED IMPROVEMENT ANALYSIS")
+    print(f"{'=' * 60}")
+
+    baseline_methods = ['uncertainty', 'random']
+    adaptive_methods = [
+        'adaptive', 'adaptive_improved', 'adaptive_ultra', 'adaptive_improved_ultra',
+        'adaptive_extreme', 'adaptive_improved_extreme',
+        'adaptive_performance_monitoring', 'adaptive_multi_scale',
+        'adaptive_performance_monitoring_ultra', 'adaptive_multi_scale_ultra',
+        'adaptive_performance_monitoring_extreme', 'adaptive_multi_scale_extreme'
+    ]
+
+    for method in adaptive_methods:
+        if method in dynamic_results:
+            method_metrics = dynamic_results[method]
+            print(f"\n🎯 {method.upper().replace('_', ' ')}:")
+            print(f"   Final Dice: {method_metrics['val_dice'][-1]:.4f}")
+            print(f"   Final Coverage: {method_metrics['performance_coverage'][-1]:.4f}")
+            print(f"   Final Consistency: {method_metrics['spatial_consistency'][-1]:.4f}")
+
+            # Compare against baselines
+            for baseline in baseline_methods:
+                if baseline in dynamic_results:
+                    baseline_metrics = dynamic_results[baseline]
+
+                    # Dice improvement
+                    dice_improvement = calculate_improvement_metrics(
+                        method_metrics['val_dice'], baseline_metrics['val_dice'], 'dice')
+
+                    # Coverage improvement
+                    coverage_improvement = calculate_improvement_metrics(
+                        method_metrics['performance_coverage'], baseline_metrics['performance_coverage'], 'coverage')
+
+                    # Consistency improvement
+                    consistency_improvement = calculate_improvement_metrics(
+                        method_metrics['spatial_consistency'], baseline_metrics['spatial_consistency'], 'consistency')
+
+                    print(f"   vs {baseline.upper()}:")
+                    print(
+                        f"     Dice: {dice_improvement['final_improvement']:.2f}% (avg: {dice_improvement['avg_improvement']:.2f}%)")
+                    print(
+                        f"     Coverage: {coverage_improvement['final_improvement']:.2f}% (avg: {coverage_improvement['avg_improvement']:.2f}%)")
+                    print(
+                        f"     Consistency: {consistency_improvement['final_improvement']:.2f}% (avg: {consistency_improvement['avg_improvement']:.2f}%)")
+                    print(
+                        f"     Convergence: {dice_improvement['convergence_round']} rounds (speed: {dice_improvement['convergence_speed']})")
+
+
 def print_summary(metrics_data):
     """Print summary statistics."""
     print("\n" + "=" * 80)
@@ -365,65 +1126,125 @@ def print_summary(metrics_data):
 
 
 def main():
-    """Main function for performance comparison."""
+    """Main function for comprehensive performance analysis and comparison."""
     args = parse_arguments()
 
-    # Load results first to get model names
-    results = load_results(args.result_paths, args.max_models)
+    # Check if we're doing directory-based analysis or file-based analysis
+    if len(args.result_paths) == 1 and os.path.isdir(args.result_paths[0]):
+        # Directory-based analysis (from result_analysis.py)
+        print("🔍 Directory-based comprehensive analysis mode")
 
-    if not results:
-        print("❌ No valid results found!")
-        return
+        # Load results from directories
+        dynamic_dir = "/opt/spatial_active_learning/result/calcifiednodule_both_spatial_dynamic_split_r_10_s_50_val_100"
+        equal_dir = "/opt/spatial_active_learning/result/calcifiednodule_both_spatial_equal_split_r_10_s_50_val_100"
 
-    # Detect split type
-    if args.split_type:
-        split_type = args.split_type
+        print("Loading results from directories...")
+        dynamic_results = {}
+        equal_results = {}
+
+        # Load dynamic split results
+        for method_dir in Path(dynamic_dir).iterdir():
+            if method_dir.is_dir():
+                results_file = method_dir / "results.json"
+                if results_file.exists():
+                    with open(results_file, 'r') as f:
+                        method_name = method_dir.name.split('_')[0]
+                        dynamic_results[method_name] = extract_metrics_from_results(json.load(f))
+
+        # Load equal split results
+        for method_dir in Path(equal_dir).iterdir():
+            if method_dir.is_dir():
+                results_file = method_dir / "results.json"
+                if results_file.exists():
+                    with open(results_file, 'r') as f:
+                        method_name = method_dir.name.split('_')[0]
+                        equal_results[method_name] = extract_metrics_from_results(json.load(f))
+
+        # Create output directory
+        output_dir = os.path.join(args.output_dir, "comprehensive_analysis")
+        os.makedirs(output_dir, exist_ok=True)
+
+        print("🚀 Starting Comprehensive Active Learning Analysis")
+        print(f"📁 Output directory: {output_dir}")
+        print(f"🎯 Target lesion: {args.target_lesion}")
+
+        # Generate comprehensive summary statistics
+        generate_comprehensive_summary_statistics(dynamic_results, equal_results)
+
+        # Create comprehensive comparison plots
+        print("\n📊 Generating comprehensive comparison plots...")
+        create_comprehensive_comparison_plots(dynamic_results, equal_results, output_dir, args.target_lesion)
+        create_advanced_methods_plot(dynamic_results, equal_results, output_dir, args.target_lesion)
+
+        # Create enhanced analysis plots
+        print("\n📊 Generating enhanced analysis plots...")
+        create_spatial_coverage_efficiency_plot(dynamic_results, equal_results, output_dir, args.target_lesion)
+        create_improvement_analysis_plot(dynamic_results, equal_results, output_dir, args.target_lesion)
+        create_pareto_frontier_plot(dynamic_results, equal_results, output_dir, args.target_lesion)
+
+        print(f"\n🎉 Comprehensive analysis completed!")
+        print(f"📁 Results saved to: {output_dir}")
+
     else:
-        split_type = detect_split_type(args.result_paths)
+        # File-based analysis (original functionality)
+        print("📊 File-based performance comparison mode")
 
-    if split_type == 'unknown':
-        print("⚠️  Warning: Could not detect split type from paths. Using default directory structure.")
-        split_type = 'unknown'
+        # Load results first to get model names
+        results = load_results(args.result_paths, args.max_models)
 
-    # Create comparison directory based on model names and split type
-    model_names = sorted(results.keys())
-    comparison_name = "_".join(model_names)
+        if not results:
+            print("❌ No valid results found!")
+            return
 
-    # Create output directory with split type subdirectory
-    if split_type != 'unknown':
-        output_dir = os.path.join(args.output_dir, split_type, comparison_name)
-    else:
-        output_dir = os.path.join(args.output_dir, comparison_name)
+        # Detect split type
+        if args.split_type:
+            split_type = args.split_type
+        else:
+            split_type = detect_split_type(args.result_paths)
 
-    os.makedirs(output_dir, exist_ok=True)
+        if split_type == 'unknown':
+            print("⚠️  Warning: Could not detect split type from paths. Using default directory structure.")
+            split_type = 'unknown'
 
-    print("🚀 Starting Active Learning Performance Comparison")
-    print(f"📁 Output directory: {output_dir}")
-    print(f"🎯 Target lesion: {args.target_lesion}")
-    print(f"📊 Split type: {split_type}")
-    print(f"📊 Comparing {len(args.result_paths)} result files")
-    print(f"📁 Comparison name: {comparison_name}")
+        # Create comparison directory based on model names and split type
+        model_names = sorted(results.keys())
+        comparison_name = "_".join(model_names)
 
-    print(f"\n✅ Successfully loaded results for {len(results)} models:")
-    for model_name in results.keys():
-        print(f"   - {model_name}")
+        # Create output directory with split type subdirectory
+        if split_type != 'unknown':
+            output_dir = os.path.join(args.output_dir, split_type, comparison_name)
+        else:
+            output_dir = os.path.join(args.output_dir, comparison_name)
 
-    # Extract metrics
-    metrics_data = extract_metrics(results)
+        os.makedirs(output_dir, exist_ok=True)
 
-    # Generate plots
-    print("\n📊 Generating comparison plots...")
-    plot_spatial_metrics(metrics_data, output_dir, args.target_lesion)
-    plot_performance_coverage(metrics_data, output_dir, args.target_lesion)
-    plot_combined_metrics(metrics_data, output_dir, args.target_lesion)
-    plot_normalized_metrics(metrics_data, output_dir, args.target_lesion)
+        print("🚀 Starting Active Learning Performance Comparison")
+        print(f"📁 Output directory: {output_dir}")
+        print(f"🎯 Target lesion: {args.target_lesion}")
+        print(f"📊 Split type: {split_type}")
+        print(f"📊 Comparing {len(args.result_paths)} result files")
+        print(f"📁 Comparison name: {comparison_name}")
 
-    # Print summary
-    print_summary(metrics_data)
+        print(f"\n✅ Successfully loaded results for {len(results)} models:")
+        for model_name in results.keys():
+            print(f"   - {model_name}")
 
-    print(f"\n🎉 Performance comparison completed!")
-    print(f"📁 Results saved to: {output_dir}")
-    print(f"📊 Split type: {split_type}")
+        # Extract metrics
+        metrics_data = extract_metrics(results)
+
+        # Generate plots
+        print("\n📊 Generating comparison plots...")
+        plot_spatial_metrics(metrics_data, output_dir, args.target_lesion)
+        plot_performance_coverage(metrics_data, output_dir, args.target_lesion)
+        plot_combined_metrics(metrics_data, output_dir, args.target_lesion)
+        plot_normalized_metrics(metrics_data, output_dir, args.target_lesion)
+
+        # Print summary
+        print_summary(metrics_data)
+
+        print(f"\n🎉 Performance comparison completed!")
+        print(f"📁 Results saved to: {output_dir}")
+        print(f"📊 Split type: {split_type}")
 
 
 if __name__ == "__main__":

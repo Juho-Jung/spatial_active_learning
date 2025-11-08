@@ -43,7 +43,7 @@ def train_model_round(model, train_dataset, val_dataset, device, epochs=50, batc
         prev_bin_dices: Previous round's bin dices for performance coverage calculation
 
     Returns:
-        tuple: (best_val_loss, avg_val_dice, avg_val_bin_metrics, current_bin_dices)
+        tuple: (best_val_loss, avg_val_dice, avg_val_iou, avg_val_bin_metrics, current_bin_dices, round_model_save_path)
     """
     # Create data loaders with reduced num_workers to avoid multiprocessing issues
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
@@ -66,7 +66,7 @@ def train_model_round(model, train_dataset, val_dataset, device, epochs=50, batc
     round_logger = _setup_round_logger(output_dir, round_num, train_dataset, val_dataset, epochs, batch_size)
 
     # Training loop with early stopping
-    best_val_loss, best_model_state, best_epoch, final_val_dice, final_spatial_metrics, current_bin_dices = _train_with_early_stopping(
+    best_val_loss, best_model_state, best_epoch, final_val_dice, final_val_iou, final_spatial_metrics, current_bin_dices = _train_with_early_stopping(
         model, train_loader, val_loader, optimizer, scheduler, criterion,
         areas, device, epochs, patience, min_delta, prev_bin_dices, round_logger
     )
@@ -81,7 +81,7 @@ def train_model_round(model, train_dataset, val_dataset, device, epochs=50, batc
     # Log completion
     _log_round_completion(round_logger, round_num, best_val_loss, best_epoch, epochs)
 
-    return best_val_loss, final_val_dice, final_spatial_metrics, current_bin_dices, round_model_save_path
+    return best_val_loss, final_val_dice, final_val_iou, final_spatial_metrics, current_bin_dices, round_model_save_path
 
 
 def _setup_round_logger(output_dir, round_num, train_dataset, val_dataset, epochs, batch_size):
@@ -135,10 +135,10 @@ def _train_with_early_stopping(model, train_loader, val_loader, optimizer, sched
 
     for epoch in epoch_pbar:
         # Training phase
-        train_loss, train_dice = _train_epoch(model, train_loader, optimizer, scheduler, criterion, device)
+        train_loss, train_dice, train_iou = _train_epoch(model, train_loader, optimizer, scheduler, criterion, device)
 
         # Validation phase
-        val_loss, val_dice, val_bin_metrics, batch_bin_dices = _validate_epoch(
+        val_loss, val_dice, val_iou, val_bin_metrics, batch_bin_dices = _validate_epoch(
             model, val_loader, criterion, areas, device
         )
 
@@ -158,7 +158,7 @@ def _train_with_early_stopping(model, train_loader, val_loader, optimizer, sched
             patience_counter += 1
 
         # Log epoch metrics
-        _log_epoch_metrics(round_logger, epoch, epochs, train_loss, val_loss, train_dice, val_dice,
+        _log_epoch_metrics(round_logger, epoch, epochs, train_loss, val_loss, train_dice, train_iou, val_dice, val_iou,
                            best_val_loss, best_epoch, patience_counter, patience, scheduler, val_bin_metrics)
 
         # Update progress bar
@@ -166,7 +166,9 @@ def _train_with_early_stopping(model, train_loader, val_loader, optimizer, sched
             'Train Loss': f'{train_loss:.4f}',
             'Val Loss': f'{val_loss:.4f}',
             'Train Dice': f'{train_dice:.4f}',
+            'Train IoU': f'{train_iou:.4f}',
             'Val Dice': f'{val_dice:.4f}',
+            'Val IoU': f'{val_iou:.4f}',
             'Worst Bin': f'{val_bin_metrics["worst_bin_dice"]:.4f}',
             'Perf Cov': f'{val_bin_metrics["performance_coverage"]:.4f}',
             'Best Val Loss': f'{best_val_loss:.4f}'
@@ -184,10 +186,11 @@ def _train_with_early_stopping(model, train_loader, val_loader, optimizer, sched
 
     # Get final metrics from the last epoch
     final_val_dice = val_dice if 'val_dice' in locals() else 0.0
+    final_val_iou = val_iou if 'val_iou' in locals() else 0.0
     final_spatial_metrics = val_bin_metrics if 'val_bin_metrics' in locals() else {}
     final_current_bin_dices = torch.cat(all_bin_dices, dim=1) if all_bin_dices else None
 
-    return best_val_loss, best_model_state, best_epoch, final_val_dice, final_spatial_metrics, final_current_bin_dices
+    return best_val_loss, best_model_state, best_epoch, final_val_dice, final_val_iou, final_spatial_metrics, final_current_bin_dices
 
 
 def _train_epoch(model, train_loader, optimizer, scheduler, criterion, device):
@@ -195,6 +198,7 @@ def _train_epoch(model, train_loader, optimizer, scheduler, criterion, device):
     model.train()
     train_loss = 0
     train_dice = 0
+    train_iou = 0
 
     for batch_idx, (images, masks) in enumerate(train_loader):
         images, masks = images.to(device), masks.to(device)
@@ -208,10 +212,11 @@ def _train_epoch(model, train_loader, optimizer, scheduler, criterion, device):
         scheduler.step()
 
         train_loss += loss.item()
-        dice, _, _, _ = calculate_metrics(outputs, masks)
+        dice, iou, _, _ = calculate_metrics(outputs, masks)
         train_dice += dice
+        train_iou += iou
 
-    return train_loss / len(train_loader), train_dice / len(train_loader)
+    return train_loss / len(train_loader), train_dice / len(train_loader), train_iou / len(train_loader)
 
 
 def _validate_epoch(model, val_loader, criterion, areas, device):
@@ -226,6 +231,7 @@ def _validate_epoch(model, val_loader, criterion, areas, device):
     }
     val_batch_count = 0
     all_bin_dices = []
+    val_iou = 0
 
     with torch.no_grad():
         for images, masks in val_loader:
@@ -233,10 +239,11 @@ def _validate_epoch(model, val_loader, criterion, areas, device):
             outputs = model(images)
             loss = criterion(outputs, masks)
 
-            dice, _, _, _ = calculate_metrics(outputs, masks)
+            dice, iou, _, _ = calculate_metrics(outputs, masks)
 
             val_loss += loss.item()
             val_dice += dice
+            val_iou += iou
 
             # Calculate bin-wise metrics
             pred_masks = outputs.squeeze(1)  # [B, H, W]
@@ -258,7 +265,7 @@ def _validate_epoch(model, val_loader, criterion, areas, device):
     # Average bin metrics
     avg_val_bin_metrics = {key: val / val_batch_count for key, val in val_bin_metrics.items()}
 
-    return val_loss / len(val_loader), val_dice / len(val_loader), avg_val_bin_metrics, all_bin_dices
+    return val_loss / len(val_loader), val_dice / len(val_loader), val_iou / len(val_loader), avg_val_bin_metrics, all_bin_dices
 
 
 def _calculate_batch_bin_dices(pred_masks, true_masks, areas):
@@ -313,7 +320,7 @@ def _calculate_performance_coverage(prev_bin_dices, current_batch_bin_dices, are
     return calculate_performance_coverage(prev_bin_dices, current_bin_dices, areas, debug=True)
 
 
-def _log_epoch_metrics(round_logger, epoch, epochs, train_loss, val_loss, train_dice, val_dice,
+def _log_epoch_metrics(round_logger, epoch, epochs, train_loss, val_loss, train_dice, train_iou, val_dice, val_iou,
                        best_val_loss, best_epoch, patience_counter, patience, scheduler, val_bin_metrics):
     """Log metrics for current epoch."""
     if not round_logger:
@@ -323,7 +330,9 @@ def _log_epoch_metrics(round_logger, epoch, epochs, train_loss, val_loss, train_
     round_logger.info(f"  Train Loss: {train_loss:.6f}")
     round_logger.info(f"  Val Loss: {val_loss:.6f}")
     round_logger.info(f"  Train Dice: {train_dice:.6f}")
+    round_logger.info(f"  Train IoU: {train_iou:.6f}")
     round_logger.info(f"  Val Dice: {val_dice:.6f}")
+    round_logger.info(f"  Val IoU: {val_iou:.6f}")
     round_logger.info(f"  Best Val Loss: {best_val_loss:.6f} (Epoch {best_epoch})")
     round_logger.info(f"  Patience: {patience_counter}/{patience}")
     round_logger.info(f"  Learning Rate: {scheduler.get_last_lr()[0]:.8f}")

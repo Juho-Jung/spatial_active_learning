@@ -19,6 +19,8 @@ import matplotlib.pyplot as plt
 import mdb.collection as mdb_c
 import mdb.document as mdb_d
 import numpy as np
+from scipy.cluster.hierarchy import dendrogram, linkage
+from scipy.spatial.distance import pdist, squareform
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 
@@ -653,8 +655,15 @@ def main():
     """Main function for visualization comparison."""
     args = parse_arguments()
 
-    # Create output directory structure
-    comparison_name = f"{extract_model_name(args.result1_path)}_{extract_model_name(args.result2_path)}"
+    # Create output directory structure with more descriptive name
+    model1_name = extract_model_name(args.result1_path)
+    model2_name = extract_model_name(args.result2_path)
+
+    # Extract split type from result path
+    split_type = "dynamic" if "dynamic_split" in args.result1_path else "equal"
+
+    # Create descriptive comparison name
+    comparison_name = f"{split_type}_{model1_name}_{model2_name}"
     base_output_dir = os.path.join(args.output_dir, comparison_name)
 
     # Create subdirectories
@@ -683,14 +692,26 @@ def main():
         print("❌ Failed to load one or both result files!")
         return
 
-    # Load raw documents using the same method as run_al_baselines.py
-    print(f"📊 Loading raw documents from {args.collection}...")
-    raw_documents = load_raw_documents(args.collection, args.target_lesion)
-    print(f"✅ Loaded {len(raw_documents)} documents")
+    # Load documents using the same method as run_al_baselines.py
+    print(f"📊 Loading documents from {args.collection}...")
+
+    # Use the same dataset loading logic as run_al_baselines.py
+    from active_learning.dataset.dataset import SAMLesionDataset
+
+    # Create dataset to get the same document loading logic
+    temp_dataset = SAMLesionDataset(
+        split='train',
+        train_collection=args.collection,
+        target_lesion=args.target_lesion
+    )
+
+    # Get all documents (this will be the same as what run_al_baselines.py uses)
+    all_documents = temp_dataset._load_documents()
+    print(f"✅ Loaded {len(all_documents)} documents")
 
     # Filter positive documents (same as run_al_baselines.py)
     positive_docs = []
-    for doc in raw_documents:
+    for doc in all_documents:
         objects = doc.get('objects', [])
         has_target_lesion = False
         for obj in objects:
@@ -701,7 +722,6 @@ def main():
             positive_docs.append(doc)
 
     print(f"📊 Filtered to {len(positive_docs)} positive documents with {args.target_lesion}")
-    raw_documents = positive_docs
 
     # Process each round
     max_rounds = min(len(result1_data), len(result2_data))
@@ -723,8 +743,8 @@ def main():
         print(f"   {model2_name}: {len(selected_indices2)} samples")
 
         # Get center points for each model
-        center_points1 = get_gt_center_points(raw_documents, selected_indices1, args.target_lesion, args.image_size)
-        center_points2 = get_gt_center_points(raw_documents, selected_indices2, args.target_lesion, args.image_size)
+        center_points1 = get_gt_center_points(positive_docs, selected_indices1, args.target_lesion, args.image_size)
+        center_points2 = get_gt_center_points(positive_docs, selected_indices2, args.target_lesion, args.image_size)
 
         print(f"   {model1_name}: {len(center_points1)} valid center points")
         print(f"   {model2_name}: {len(center_points2)} valid center points")
@@ -753,6 +773,21 @@ def main():
         stats2 = calculate_spatial_statistics(center_points2, model2_name)
         print_round_statistics(stats1, stats2, round_num)
 
+        # Create enhanced analysis plots (new functions)
+        print(f"   📊 Creating enhanced analysis plots for round {round_num}...")
+
+        # Selection process analysis
+        create_selection_process_analysis(center_points1, center_points2, model1_name, model2_name,
+                                          round_num, comparison_dir, args.image_size)
+
+        # Clustering analysis
+        create_clustering_analysis(center_points1, center_points2, model1_name, model2_name,
+                                   round_num, comparison_dir, args.image_size)
+
+        # Coverage efficiency analysis
+        create_coverage_efficiency_analysis(center_points1, center_points2, model1_name, model2_name,
+                                            round_num, comparison_dir, args.image_size)
+
     # Create timeline comparison plot (2x3 grid showing specified rounds)
     print(f"\n📊 Creating timeline comparison plot...")
     timeline_path = os.path.join(comparison_dir, 'timeline_comparison.png')
@@ -764,6 +799,9 @@ def main():
     print(f"📊 Generated plots for {max_rounds} rounds")
     print(f"📁 Directory structure:")
     print(f"   - comparison/: round1_comparison.png, round2_comparison.png, ..., timeline_comparison.png")
+    print(f"   - comparison/: selection_process_analysis_round*.png (6-subplot detailed analysis)")
+    print(f"   - comparison/: clustering_analysis_round*.png (hierarchical + silhouette analysis)")
+    print(f"   - comparison/: coverage_efficiency_analysis_round*.png (Voronoi + efficiency metrics)")
     print(f"   - {model1_name}/: round1_{model1_name}.png, round2_{model1_name}.png, ...")
     print(f"   - {model1_name}/: cumulative_round1_{model1_name}.png, cumulative_round2_{model1_name}.png, ...")
     print(f"   - {model2_name}/: round1_{model2_name}.png, round2_{model2_name}.png, ...")
@@ -772,6 +810,427 @@ def main():
     print(f"   - timeline_comparison.png: 2x3 grid showing 1st, middle, last rounds")
     print(f"   - round*_comparison.png: Individual round comparisons")
     print(f"   - cumulative_round*_*.png: Cumulative selection patterns")
+    print(f"   - selection_process_analysis_round*.png: 6-subplot detailed analysis")
+    print(f"   - clustering_analysis_round*.png: Clustering pattern analysis")
+    print(f"   - coverage_efficiency_analysis_round*.png: Coverage efficiency analysis")
+
+
+def create_selection_process_analysis(center_points1, center_points2, model1_name, model2_name,
+                                      round_num, output_dir, image_size=512):
+    """Create detailed selection process analysis."""
+    if not center_points1 or not center_points2:
+        print(f"⚠️  Warning: Missing center points for round {round_num}")
+        return
+
+    fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+    fig.suptitle(f'Selection Process Analysis - Round {round_num}\n{model1_name} vs {model2_name}',
+                 fontsize=16, fontweight='bold')
+
+    # Plot 1: Direct comparison
+    ax1 = axes[0, 0]
+    ax1.set_xlim(0, image_size)
+    ax1.set_ylim(0, image_size)
+    ax1.set_aspect('equal')
+    ax1.invert_yaxis()
+
+    x1, y1 = zip(*center_points1)
+    x2, y2 = zip(*center_points2)
+    ax1.scatter(x1, y1, c='red', s=50, alpha=0.7, label=f'{model1_name} ({len(center_points1)})', marker='o')
+    ax1.scatter(x2, y2, c='blue', s=50, alpha=0.7, label=f'{model2_name} ({len(center_points2)})', marker='s')
+
+    ax1.grid(True, alpha=0.3)
+    ax1.set_title('Direct Comparison')
+    ax1.set_xlabel('X Coordinate')
+    ax1.set_ylabel('Y Coordinate')
+    ax1.legend()
+
+    # Plot 2: Density analysis
+    ax2 = axes[0, 1]
+    # Create density heatmap for model1
+    if len(center_points1) > 1:
+        from scipy.stats import gaussian_kde
+        points1 = np.array(center_points1)
+        kde1 = gaussian_kde(points1.T)
+
+        # Create grid for density calculation
+        x_grid = np.linspace(0, image_size, 50)
+        y_grid = np.linspace(0, image_size, 50)
+        X, Y = np.meshgrid(x_grid, y_grid)
+        positions = np.vstack([X.ravel(), Y.ravel()])
+        density1 = kde1(positions).reshape(X.shape)
+
+        im1 = ax2.imshow(density1, extent=[0, image_size, image_size, 0],
+                         cmap='Reds', alpha=0.7, origin='upper')
+        ax2.scatter(x1, y1, c='darkred', s=30, alpha=0.8, marker='o')
+
+    ax2.set_title(f'{model1_name} Density Analysis')
+    ax2.set_xlabel('X Coordinate')
+    ax2.set_ylabel('Y Coordinate')
+
+    # Plot 3: Density analysis for model2
+    ax3 = axes[0, 2]
+    if len(center_points2) > 1:
+        points2 = np.array(center_points2)
+        kde2 = gaussian_kde(points2.T)
+        density2 = kde2(positions).reshape(X.shape)
+
+        im2 = ax3.imshow(density2, extent=[0, image_size, image_size, 0],
+                         cmap='Blues', alpha=0.7, origin='upper')
+        ax3.scatter(x2, y2, c='darkblue', s=30, alpha=0.8, marker='s')
+
+    ax3.set_title(f'{model2_name} Density Analysis')
+    ax3.set_xlabel('X Coordinate')
+    ax3.set_ylabel('Y Coordinate')
+
+    # Plot 4: Clustering analysis
+    ax4 = axes[1, 0]
+    if len(center_points1) > 2:
+        # K-means clustering for model1
+        n_clusters = min(3, len(center_points1))
+        kmeans1 = KMeans(n_clusters=n_clusters, random_state=42)
+        cluster_labels1 = kmeans1.fit_predict(center_points1)
+
+        colors1 = ['red', 'orange', 'pink']
+        for i in range(n_clusters):
+            cluster_points = [center_points1[j] for j in range(len(center_points1)) if cluster_labels1[j] == i]
+            if cluster_points:
+                cx, cy = zip(*cluster_points)
+                ax4.scatter(cx, cy, c=colors1[i], s=50, alpha=0.7,
+                            label=f'{model1_name} Cluster {i + 1}')
+
+        ax4.set_title(f'{model1_name} Clustering Analysis')
+        ax4.set_xlabel('X Coordinate')
+        ax4.set_ylabel('Y Coordinate')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+
+    # Plot 5: Clustering analysis for model2
+    ax5 = axes[1, 1]
+    if len(center_points2) > 2:
+        n_clusters = min(3, len(center_points2))
+        kmeans2 = KMeans(n_clusters=n_clusters, random_state=42)
+        cluster_labels2 = kmeans2.fit_predict(center_points2)
+
+        colors2 = ['blue', 'cyan', 'lightblue']
+        for i in range(n_clusters):
+            cluster_points = [center_points2[j] for j in range(len(center_points2)) if cluster_labels2[j] == i]
+            if cluster_points:
+                cx, cy = zip(*cluster_points)
+                ax5.scatter(cx, cy, c=colors2[i], s=50, alpha=0.7,
+                            label=f'{model2_name} Cluster {i + 1}')
+
+        ax5.set_title(f'{model2_name} Clustering Analysis')
+        ax5.set_xlabel('X Coordinate')
+        ax5.set_ylabel('Y Coordinate')
+        ax5.legend()
+        ax5.grid(True, alpha=0.3)
+
+    # Plot 6: Spatial distribution comparison
+    ax6 = axes[1, 2]
+    # Calculate spatial statistics
+
+    def calculate_spatial_stats(points):
+        if len(points) < 2:
+            return {}
+        points_array = np.array(points)
+        return {
+            'mean_x': np.mean(points_array[:, 0]),
+            'mean_y': np.mean(points_array[:, 1]),
+            'std_x': np.std(points_array[:, 0]),
+            'std_y': np.std(points_array[:, 1]),
+            'spread': np.sqrt(np.var(points_array[:, 0]) + np.var(points_array[:, 1]))
+        }
+
+    stats1 = calculate_spatial_stats(center_points1)
+    stats2 = calculate_spatial_stats(center_points2)
+
+    # Create comparison bar chart
+    metrics = ['Mean X', 'Mean Y', 'Std X', 'Std Y', 'Spread']
+    values1 = [stats1.get('mean_x', 0), stats1.get('mean_y', 0),
+               stats1.get('std_x', 0), stats1.get('std_y', 0), stats1.get('spread', 0)]
+    values2 = [stats2.get('mean_x', 0), stats2.get('mean_y', 0),
+               stats2.get('std_x', 0), stats2.get('std_y', 0), stats2.get('spread', 0)]
+
+    x_pos = np.arange(len(metrics))
+    width = 0.35
+
+    ax6.bar(x_pos - width / 2, values1, width, label=model1_name, alpha=0.7, color='red')
+    ax6.bar(x_pos + width / 2, values2, width, label=model2_name, alpha=0.7, color='blue')
+
+    ax6.set_title('Spatial Distribution Comparison')
+    ax6.set_xlabel('Metrics')
+    ax6.set_ylabel('Values')
+    ax6.set_xticks(x_pos)
+    ax6.set_xticklabels(metrics, rotation=45)
+    ax6.legend()
+    ax6.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    output_path = os.path.join(output_dir, f'selection_process_analysis_round{round_num}.png')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"📊 Selection process analysis saved: {output_path}")
+
+
+def create_clustering_analysis(center_points1, center_points2, model1_name, model2_name,
+                               round_num, output_dir, image_size=512):
+    """Create comprehensive clustering analysis."""
+    if not center_points1 or not center_points2:
+        print(f"⚠️  Warning: Missing center points for round {round_num}")
+        return
+
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig.suptitle(f'Clustering Analysis - Round {round_num}\n{model1_name} vs {model2_name}',
+                 fontsize=16, fontweight='bold')
+
+    # Plot 1: Hierarchical clustering dendrogram for model1
+    ax1 = axes[0, 0]
+    if len(center_points1) > 2:
+        points1 = np.array(center_points1)
+        linkage_matrix1 = linkage(points1, method='ward')
+        dendrogram(linkage_matrix1, ax=ax1, leaf_rotation=90)
+        ax1.set_title(f'{model1_name} Hierarchical Clustering')
+        ax1.set_xlabel('Sample Index')
+        ax1.set_ylabel('Distance')
+
+    # Plot 2: Hierarchical clustering dendrogram for model2
+    ax2 = axes[0, 1]
+    if len(center_points2) > 2:
+        points2 = np.array(center_points2)
+        linkage_matrix2 = linkage(points2, method='ward')
+        dendrogram(linkage_matrix2, ax=ax2, leaf_rotation=90)
+        ax2.set_title(f'{model2_name} Hierarchical Clustering')
+        ax2.set_xlabel('Sample Index')
+        ax2.set_ylabel('Distance')
+
+    # Plot 3: Silhouette analysis
+    ax3 = axes[1, 0]
+    silhouette_scores1 = []
+    silhouette_scores2 = []
+    k_range = range(2, min(6, len(center_points1), len(center_points2)))
+
+    for k in k_range:
+        if len(center_points1) >= k:
+            kmeans1 = KMeans(n_clusters=k, random_state=42)
+            cluster_labels1 = kmeans1.fit_predict(center_points1)
+            score1 = silhouette_score(center_points1, cluster_labels1)
+            silhouette_scores1.append(score1)
+        else:
+            silhouette_scores1.append(0)
+
+        if len(center_points2) >= k:
+            kmeans2 = KMeans(n_clusters=k, random_state=42)
+            cluster_labels2 = kmeans2.fit_predict(center_points2)
+            score2 = silhouette_score(center_points2, cluster_labels2)
+            silhouette_scores2.append(score2)
+        else:
+            silhouette_scores2.append(0)
+
+    ax3.plot(k_range, silhouette_scores1, marker='o', label=model1_name, linewidth=2)
+    ax3.plot(k_range, silhouette_scores2, marker='s', label=model2_name, linewidth=2)
+    ax3.set_title('Silhouette Score Analysis')
+    ax3.set_xlabel('Number of Clusters')
+    ax3.set_ylabel('Silhouette Score')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+
+    # Plot 4: Cluster quality comparison
+    ax4 = axes[1, 1]
+    if len(center_points1) > 2 and len(center_points2) > 2:
+        # Calculate optimal number of clusters
+        optimal_k1 = k_range[np.argmax(silhouette_scores1)]
+        optimal_k2 = k_range[np.argmax(silhouette_scores2)]
+
+        # Final clustering with optimal k
+        kmeans1_final = KMeans(n_clusters=optimal_k1, random_state=42)
+        kmeans2_final = KMeans(n_clusters=optimal_k2, random_state=42)
+
+        cluster_labels1_final = kmeans1_final.fit_predict(center_points1)
+        cluster_labels2_final = kmeans2_final.fit_predict(center_points2)
+
+        # Calculate cluster statistics
+        def calculate_cluster_stats(points, labels):
+            stats = {}
+            for i in range(max(labels) + 1):
+                cluster_points = [points[j] for j in range(len(points)) if labels[j] == i]
+                if cluster_points:
+                    cluster_array = np.array(cluster_points)
+                    stats[f'cluster_{i}_size'] = len(cluster_points)
+                    stats[f'cluster_{i}_spread'] = np.sqrt(np.var(cluster_array[:, 0]) + np.var(cluster_array[:, 1]))
+            return stats
+
+        stats1 = calculate_cluster_stats(center_points1, cluster_labels1_final)
+        stats2 = calculate_cluster_stats(center_points2, cluster_labels2_final)
+
+        # Create comparison
+        cluster_sizes1 = [stats1.get(f'cluster_{i}_size', 0) for i in range(optimal_k1)]
+        cluster_sizes2 = [stats2.get(f'cluster_{i}_size', 0) for i in range(optimal_k2)]
+
+        x_pos1 = np.arange(optimal_k1)
+        x_pos2 = np.arange(optimal_k2)
+
+        ax4.bar(x_pos1 - 0.2, cluster_sizes1, 0.4, label=model1_name, alpha=0.7, color='red')
+        ax4.bar(x_pos2 + 0.2, cluster_sizes2, 0.4, label=model2_name, alpha=0.7, color='blue')
+
+        ax4.set_title('Optimal Cluster Size Comparison')
+        ax4.set_xlabel('Cluster Index')
+        ax4.set_ylabel('Cluster Size')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    output_path = os.path.join(output_dir, f'clustering_analysis_round{round_num}.png')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"📊 Clustering analysis saved: {output_path}")
+
+
+def create_coverage_efficiency_analysis(center_points1, center_points2, model1_name, model2_name,
+                                        round_num, output_dir, image_size=512):
+    """Create coverage efficiency analysis."""
+    if not center_points1 or not center_points2:
+        print(f"⚠️  Warning: Missing center points for round {round_num}")
+        return
+
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig.suptitle(f'Coverage Efficiency Analysis - Round {round_num}\n{model1_name} vs {model2_name}',
+                 fontsize=16, fontweight='bold')
+
+    # Plot 1: Voronoi diagram analysis
+    ax1 = axes[0, 0]
+    from scipy.spatial import Voronoi, voronoi_plot_2d
+
+    if len(center_points1) > 2:
+        points1 = np.array(center_points1)
+        vor1 = Voronoi(points1)
+        voronoi_plot_2d(vor1, ax=ax1, show_vertices=False, line_colors='red', line_width=2)
+        ax1.scatter(points1[:, 0], points1[:, 1], c='red', s=50, alpha=0.8, marker='o')
+
+    ax1.set_xlim(0, image_size)
+    ax1.set_ylim(0, image_size)
+    ax1.set_aspect('equal')
+    ax1.invert_yaxis()
+    ax1.set_title(f'{model1_name} Voronoi Diagram')
+    ax1.grid(True, alpha=0.3)
+
+    # Plot 2: Voronoi diagram for model2
+    ax2 = axes[0, 1]
+    if len(center_points2) > 2:
+        points2 = np.array(center_points2)
+        vor2 = Voronoi(points2)
+        voronoi_plot_2d(vor2, ax=ax2, show_vertices=False, line_colors='blue', line_width=2)
+        ax2.scatter(points2[:, 0], points2[:, 1], c='blue', s=50, alpha=0.8, marker='s')
+
+    ax2.set_xlim(0, image_size)
+    ax2.set_ylim(0, image_size)
+    ax2.set_aspect('equal')
+    ax2.invert_yaxis()
+    ax2.set_title(f'{model2_name} Voronoi Diagram')
+    ax2.grid(True, alpha=0.3)
+
+    # Plot 3: Coverage efficiency metrics
+    ax3 = axes[1, 0]
+
+    def calculate_coverage_metrics(points):
+        if len(points) < 2:
+            return {}
+        points_array = np.array(points)
+
+        # Calculate convex hull area
+        from scipy.spatial import ConvexHull
+        try:
+            hull = ConvexHull(points_array)
+            hull_area = hull.volume if len(points_array[0]) == 2 else hull.area
+        except:
+            hull_area = 0
+
+        # Calculate bounding box area
+        min_x, max_x = np.min(points_array[:, 0]), np.max(points_array[:, 0])
+        min_y, max_y = np.min(points_array[:, 1]), np.max(points_array[:, 1])
+        bbox_area = (max_x - min_x) * (max_y - min_y)
+
+        # Calculate spread
+        spread = np.sqrt(np.var(points_array[:, 0]) + np.var(points_array[:, 1]))
+
+        return {
+            'hull_area': hull_area,
+            'bbox_area': bbox_area,
+            'spread': spread,
+            'efficiency': hull_area / bbox_area if bbox_area > 0 else 0
+        }
+
+    metrics1 = calculate_coverage_metrics(center_points1)
+    metrics2 = calculate_coverage_metrics(center_points2)
+
+    # Create comparison bar chart
+    metric_names = ['Hull Area', 'BBox Area', 'Spread', 'Efficiency']
+    values1 = [metrics1.get('hull_area', 0), metrics1.get('bbox_area', 0),
+               metrics1.get('spread', 0), metrics1.get('efficiency', 0)]
+    values2 = [metrics2.get('hull_area', 0), metrics2.get('bbox_area', 0),
+               metrics2.get('spread', 0), metrics2.get('efficiency', 0)]
+
+    x_pos = np.arange(len(metric_names))
+    width = 0.35
+
+    ax3.bar(x_pos - width / 2, values1, width, label=model1_name, alpha=0.7, color='red')
+    ax3.bar(x_pos + width / 2, values2, width, label=model2_name, alpha=0.7, color='blue')
+
+    ax3.set_title('Coverage Efficiency Metrics')
+    ax3.set_xlabel('Metrics')
+    ax3.set_ylabel('Values')
+    ax3.set_xticks(x_pos)
+    ax3.set_xticklabels(metric_names, rotation=45)
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+
+    # Plot 4: Spatial distribution quality
+    ax4 = axes[1, 1]
+
+    def calculate_spatial_quality(points):
+        if len(points) < 2:
+            return {}
+        points_array = np.array(points)
+
+        # Calculate pairwise distances
+        distances = pdist(points_array)
+
+        return {
+            'mean_distance': np.mean(distances),
+            'std_distance': np.std(distances),
+            'min_distance': np.min(distances),
+            'max_distance': np.max(distances),
+            'uniformity': 1 - (np.std(distances) / np.mean(distances)) if np.mean(distances) > 0 else 0
+        }
+
+    quality1 = calculate_spatial_quality(center_points1)
+    quality2 = calculate_spatial_quality(center_points2)
+
+    # Create comparison
+    quality_names = ['Mean Dist', 'Std Dist', 'Min Dist', 'Max Dist', 'Uniformity']
+    q_values1 = [quality1.get('mean_distance', 0), quality1.get('std_distance', 0),
+                 quality1.get('min_distance', 0), quality1.get('max_distance', 0),
+                 quality1.get('uniformity', 0)]
+    q_values2 = [quality2.get('mean_distance', 0), quality2.get('std_distance', 0),
+                 quality2.get('min_distance', 0), quality2.get('max_distance', 0),
+                 quality2.get('uniformity', 0)]
+
+    x_pos = np.arange(len(quality_names))
+    ax4.bar(x_pos - width / 2, q_values1, width, label=model1_name, alpha=0.7, color='red')
+    ax4.bar(x_pos + width / 2, q_values2, width, label=model2_name, alpha=0.7, color='blue')
+
+    ax4.set_title('Spatial Distribution Quality')
+    ax4.set_xlabel('Quality Metrics')
+    ax4.set_ylabel('Values')
+    ax4.set_xticks(x_pos)
+    ax4.set_xticklabels(quality_names, rotation=45)
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    output_path = os.path.join(output_dir, f'coverage_efficiency_analysis_round{round_num}.png')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"📊 Coverage efficiency analysis saved: {output_path}")
 
 
 if __name__ == "__main__":

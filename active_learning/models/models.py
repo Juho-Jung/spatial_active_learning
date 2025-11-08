@@ -276,7 +276,13 @@ class SegmentationModel(nn.Module):
             # This is a simple approach - you might want to modify based on your needs
             if hasattr(self.model, 'encoder'):
                 # For SMP models, extract encoder features
-                features = self.model.encoder(x)
+                encoder_output = self.model.encoder(x)
+                # SMP encoder returns a list of features from different stages
+                # Use the last (highest-level) feature map
+                if isinstance(encoder_output, (list, tuple)):
+                    features = encoder_output[-1]  # [B, C, H, W]
+                else:
+                    features = encoder_output  # [B, C, H, W]
                 # Global average pooling
                 features = torch.mean(features, dim=(2, 3))  # [B, feature_dim]
             else:

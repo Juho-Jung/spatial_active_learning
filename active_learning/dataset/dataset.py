@@ -102,27 +102,58 @@ class SAMLesionDataset(Dataset):
 
         documents = list(collection.find(query).sort('_id', 1))  # Sort by _id for consistent ordering
 
-        # Load converted MDB data for consensus annotations: 1st round
-        converted_data_path_first_round = "/opt/pxi/projects/calcified_nodule/relabeling_update/calcifiednodule/converted_mdb_data_calcifiednodule_1st_round.json"
-        if not os.path.exists(converted_data_path_first_round):
-            print(
-                f"   Warning: converted_mdb_data_calcifiednodule_1st_round.json not found at {converted_data_path_first_round}")
-            return []
-        with open(converted_data_path_first_round, 'r') as f:
-            converted_data_first_round = json.load(f)
-        print(f"   Loaded {len(converted_data_first_round)} entries from converted_mdb_data_calcifiednodule_1st_round.json")
+        if self.target_lesion == 'calcifiednodule':
+            first_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/calcifiednodule/converted_mdb_data_calcifiednodule_1st_round.json"
+            second_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/calcifiednodule/converted_mdb_data_calcifiednodule_2nd_round.json"
+            if not os.path.exists(first_round_path):
+                print(
+                    f"   Warning: converted_mdb_data_calcifiednodule_1st_round.json not found at {first_round_path}")
+                return {}
+            with open(first_round_path, 'r') as f:
+                converted_data_first_round = json.load(f)
+            print(f"   Loaded {len(converted_data_first_round)} entries from converted_mdb_data_calcifiednodule_1st_round.json")
 
-        # Load converted MDB data for consensus annotations: 2nd round
-        converted_data_path_second_round = "/opt/pxi/projects/calcified_nodule/relabeling_update/calcifiednodule/converted_mdb_data_calcifiednodule_2nd_round.json"
-        if not os.path.exists(converted_data_path_second_round):
+            if not os.path.exists(second_round_path):
+                print(
+                    f"   Warning: converted_mdb_data_calcifiednodule_2nd_round.json not found at {second_round_path}")
+                return {}
+            with open(second_round_path, 'r') as f:
+                converted_data_second_round = json.load(f)
             print(
-                f"   Warning: converted_mdb_data_calcifiednodule_2nd_round.json not found at {converted_data_path_second_round}")
-            return []
-        with open(converted_data_path_second_round, 'r') as f:
-            converted_data_second_round = json.load(f)
-        print(f"   Loaded {len(converted_data_second_round)} entries from converted_mdb_data_calcifiednodule_2nd_round.json")
+                f"   Loaded {len(converted_data_second_round)} entries from converted_mdb_data_calcifiednodule_2nd_round.json")
 
-        converted_data = {**converted_data_first_round, **converted_data_second_round}
+            converted_data = {**converted_data_first_round, **converted_data_second_round}
+
+        elif self.target_lesion == 'calcification':
+            first_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/aortic_calcification/converted_mdb_data_1st_round.json"
+            second_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/aortic_calcification/converted_mdb_data_2nd_round.json"
+            third_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/aortic_calcification/converted_mdb_data_3rd_round.json"
+
+            if not os.path.exists(first_round_path):
+                print(
+                    f"   Warning: converted_mdb_data_1st_round.json not found at {first_round_path}")
+                return {}
+            with open(first_round_path, 'r') as f:
+                converted_data_first_round = json.load(f)
+            print(f"   Loaded {len(converted_data_first_round)} entries from converted_mdb_data_1st_round.json")
+
+            if not os.path.exists(second_round_path):
+                print(
+                    f"   Warning: converted_mdb_data_2nd_round.json not found at {second_round_path}")
+                return {}
+            with open(second_round_path, 'r') as f:
+                converted_data_second_round = json.load(f)
+            print(f"   Loaded {len(converted_data_second_round)} entries from converted_mdb_data_2nd_round.json")
+
+            if not os.path.exists(third_round_path):
+                print(
+                    f"   Warning: converted_mdb_data_3rd_round.json not found at {third_round_path}")
+                return {}
+            with open(third_round_path, 'r') as f:
+                converted_data_third_round = json.load(f)
+            print(f"   Loaded {len(converted_data_third_round)} entries from converted_mdb_data_3rd_round.json")
+
+            converted_data = {**converted_data_first_round, **converted_data_second_round, **converted_data_third_round}
 
         # Create mapping from path_dicom stem to doc
         doc_mapping = {}
@@ -176,14 +207,18 @@ class SAMLesionDataset(Dataset):
                             consensus_objects = []
                             for annotation in consensus_annotations:
                                 for obj in annotation.get('objects', []):
-                                    if obj.get('finding_name') == 'Calcified Nodule':
-                                        # Convert to calcifiednodule format
-                                        consensus_objects.append({
-                                            'finding_name': 'calcifiednodule',
-                                            'polygon': obj.get('polygon'),
-                                            'confidence': obj.get('confidence'),
-                                            'remark': obj.get('remark', '')
-                                        })
+                                    if self.target_lesion == 'calcification' and obj.get('finding_name') == 'Aorta Calcification':
+                                        consensus_objects.append({'finding_name': 'calcification',
+                                                                  'polygon': obj.get('polygon'),
+                                                                  'confidence': obj.get('confidence'),
+                                                                  'remark': obj.get('remark', '')
+                                                                  })
+                                    elif self.target_lesion == 'calcifiednodule' and obj.get('finding_name') == 'Calcified Nodule':
+                                        consensus_objects.append({'finding_name': 'calcifiednodule',
+                                                                  'polygon': obj.get('polygon'),
+                                                                  'confidence': obj.get('confidence'),
+                                                                  'remark': obj.get('remark', '')
+                                                                  })
 
                             if consensus_objects:
                                 # Create a copy of the document with updated objects (positive sample)

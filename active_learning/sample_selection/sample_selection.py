@@ -22,6 +22,13 @@ except ImportError:
     select_samples_multi_scale_hybrid_ultra = None
     select_samples_adaptive_performance_monitoring_ultra = None
 
+# Import Coreset (ICLR 2018)
+try:
+    from .sample_selection_coreset import select_samples_coreset
+except ImportError:
+    # Fallback if coreset is not available
+    select_samples_coreset = None
+
 
 def create_spatial_bins(height, width, grid_width=2, grid_height=3):
     """
@@ -1140,12 +1147,12 @@ SELECTION_STRATEGIES = {
     'adaptive_performance_monitoring': select_samples_adaptive_performance_monitoring,
     'diversity': select_samples_diversity,
     'diversity_uncertainty': select_samples_diversity_uncertainty,
+    'coreset': select_samples_coreset,
     # ULTRA AGGRESSIVE versions
     'adaptive_ultra': select_samples_adaptive_ultra,
     'adaptive_improved_ultra': select_samples_adaptive_improved_ultra,
     'adaptive_multi_scale_ultra': select_samples_multi_scale_hybrid_ultra,
-    'adaptive_performance_monitoring_ultra': select_samples_adaptive_performance_monitoring_ultra,
-}
+    'adaptive_performance_monitoring_ultra': select_samples_adaptive_performance_monitoring_ultra}
 
 
 def get_selection_strategy(strategy_name):
