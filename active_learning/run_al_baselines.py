@@ -57,7 +57,7 @@ def _parse_arguments():
                                  'adaptive', 'adaptive_improved',
                                  'adaptive_multi_scale', 'adaptive_performance_monitoring',
                                  'diversity', 'diversity_uncertainty',
-                                 'coreset',
+                                 'coreset', 'taudis',
                                  # ULTRA AGGRESSIVE versions
                                  'adaptive_ultra', 'adaptive_improved_ultra',
                                  'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra'],
@@ -257,7 +257,7 @@ def _create_model_for_training(args, device):
 def _calculate_uncertainties(args, model, full_dataset, pool_indices, selected_indices, device):
     """Calculate uncertainties for sample selection."""
     if args.mode not in ['uncertainty', 'uncertainty_area', 'adaptive', 'adaptive_improved', 'adaptive_multi_scale', 'adaptive_performance_monitoring', 'diversity', 'diversity_uncertainty',
-                         'coreset',
+                         'coreset', 'taudis',
                          'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra']:
         return None
 
@@ -289,6 +289,14 @@ def _calculate_uncertainties(args, model, full_dataset, pool_indices, selected_i
             return uncertainty_func(model, temp_loader, device, return_features=True)
         else:
             return uncertainty_func(model, temp_loader, device, return_features=True)
+    elif args.mode == 'taudis':
+        # For TAUDIS mode, we need both features and predictions (for instance extraction)
+        if args.uncertainty_type == 'mc_dropout':
+            return uncertainty_func(model, temp_loader, device, args.mc_dropout_T, return_detailed=True, return_features=True)
+        elif args.uncertainty_type == 'none':
+            return uncertainty_func(model, temp_loader, device, return_detailed=True, return_features=True)
+        else:
+            return uncertainty_func(model, temp_loader, device, return_detailed=True, return_features=True)
     else:
         # For other modes, return simple uncertainties
         if args.uncertainty_type == 'mc_dropout':
@@ -348,6 +356,15 @@ def _select_samples(args, pool_indices, uncertainties, selected_indices, areas, 
     elif args.mode == 'coreset':
         features = getattr(args, 'features', None)
         return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices, areas, features, first_round_seed)
+    elif args.mode == 'taudis':
+        # For TAUDIS, we need features and probs (predictions)
+        features = getattr(args, 'features', None)
+        probs = getattr(args, 'probs', None)
+        alpha = getattr(args, 'taudis_alpha', 2.5)
+        beta = getattr(args, 'taudis_beta', 1.5)
+        sigma = getattr(args, 'taudis_sigma', 0.8)
+        return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
+                              areas, features, probs, alpha, beta, sigma, first_round_seed)
     elif args.mode == 'adaptive':
         # For adaptive selection, we need additional parameters
         # These should be passed from the main function or computed here
@@ -558,7 +575,7 @@ def main():
         uncertainties = None
         if args.mode in ['uncertainty', 'uncertainty_area', 'adaptive', 'adaptive_improved',
                          'adaptive_multi_scale', 'adaptive_performance_monitoring', 'diversity', 'diversity_uncertainty',
-                         'coreset',
+                         'coreset', 'taudis',
                          'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra']:
             model = _create_model_for_uncertainty(args, device, previous_round_model_path)
             uncertainty_data = _calculate_uncertainties(
@@ -583,6 +600,13 @@ def main():
                 # Extract uncertainties and features for diversity/coreset selection
                 uncertainties = uncertainty_data['uncertainties']
                 args.features = uncertainty_data['features']  # Feature embeddings for diversity/coreset
+            elif args.mode == 'taudis' and isinstance(uncertainty_data, dict):
+                # Extract uncertainties, features, and predictions for TAUDIS selection
+                uncertainties = uncertainty_data['uncertainties']
+                args.features = uncertainty_data['features']  # Feature embeddings for instance feature extraction
+                args.probs = uncertainty_data.get('predictions', None)  # Predictions for instance extraction
+                if args.probs is None:
+                    print("⚠️ TAUDIS: No predictions found in uncertainty_data. Falling back to uncertainty selection.")
             else:
                 uncertainties = uncertainty_data
 

@@ -15,6 +15,7 @@ from .sample_selection import (SELECTION_STRATEGIES, create_spatial_bins,
                                select_samples_uncertainty,
                                select_samples_uncertainty_area)
 from .sample_selection_coreset import select_samples_coreset
+from .sample_selection_TAUDIS import select_samples_TAUDIS
 from .sample_selection_ultra import (
     select_samples_adaptive_improved_ultra,
     select_samples_adaptive_performance_monitoring_ultra,
@@ -30,6 +31,7 @@ __all__ = [
     'select_samples_diversity',
     'select_samples_diversity_uncertainty',
     'select_samples_coreset',
+    'select_samples_TAUDIS',
     'get_selection_strategy',
     'SELECTION_STRATEGIES'
 ]

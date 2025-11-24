@@ -29,6 +29,13 @@ except ImportError:
     # Fallback if coreset is not available
     select_samples_coreset = None
 
+# Import TAUDIS (ICCV 2023)
+try:
+    from .sample_selection_TAUDIS import select_samples_TAUDIS
+except ImportError:
+    # Fallback if TAUDIS is not available
+    select_samples_TAUDIS = None
+
 
 def create_spatial_bins(height, width, grid_width=2, grid_height=3):
     """
@@ -1148,6 +1155,7 @@ SELECTION_STRATEGIES = {
     'diversity': select_samples_diversity,
     'diversity_uncertainty': select_samples_diversity_uncertainty,
     'coreset': select_samples_coreset,
+    'taudis': select_samples_TAUDIS,
     # ULTRA AGGRESSIVE versions
     'adaptive_ultra': select_samples_adaptive_ultra,
     'adaptive_improved_ultra': select_samples_adaptive_improved_ultra,

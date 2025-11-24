@@ -87,7 +87,7 @@ def calculate_uncertainty_base(model, dataloader, device, return_detailed=False,
         return np.array(uncertainties)
 
 
-def calculate_uncertainty_mc_dropout(model, dataloader, device, T=8, return_detailed=False):
+def calculate_uncertainty_mc_dropout(model, dataloader, device, T=8, return_detailed=False, return_features=False):
     """
     Calculate Monte Carlo Dropout uncertainty.
 
@@ -100,6 +100,7 @@ def calculate_uncertainty_mc_dropout(model, dataloader, device, T=8, return_deta
         device: Device to run the model on
         T: Number of Monte Carlo samples (default: 8)
         return_detailed: If True, return detailed predictions and uncertainties
+        return_features: If True, return feature embeddings
 
     Returns:
         np.array or dict: Array of uncertainty scores for each sample, or dict with detailed info
@@ -108,7 +109,7 @@ def calculate_uncertainty_mc_dropout(model, dataloader, device, T=8, return_deta
     uncertainties = []
     all_predictions = []
     all_uncertainties = []
-    all_sam_predictions = []
+    all_features = []
 
     for images, masks in dataloader:
         images = images.to(device)
@@ -118,7 +119,12 @@ def calculate_uncertainty_mc_dropout(model, dataloader, device, T=8, return_deta
         pred_samples = []
         for _ in range(T):
             with torch.no_grad():
-                pred = model(images)
+                if return_features:
+                    pred, features = model(images, return_features=True)
+                    if _ == 0:  # Only store features from first sample
+                        all_features.append(features.cpu().numpy())
+                else:
+                    pred = model(images)
                 pred_samples.append(pred.squeeze(1).cpu().numpy())
 
         # Calculate mean prediction and entropy
@@ -146,10 +152,18 @@ def calculate_uncertainty_mc_dropout(model, dataloader, device, T=8, return_deta
     model.eval()  # Disable dropout
 
     if return_detailed:
-        return {
+        result = {
             'uncertainties': np.array(uncertainties),
             'predictions': np.concatenate(all_predictions, axis=0) if all_predictions else np.array([]),
             'pixel_uncertainties': np.concatenate(all_uncertainties, axis=0) if all_uncertainties else np.array([])
+        }
+        if return_features and all_features:
+            result['features'] = np.concatenate(all_features, axis=0)
+        return result
+    elif return_features and all_features:
+        return {
+            'uncertainties': np.array(uncertainties),
+            'features': np.concatenate(all_features, axis=0)
         }
     else:
         return np.array(uncertainties)
