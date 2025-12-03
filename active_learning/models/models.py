@@ -301,3 +301,165 @@ class SegmentationModel(nn.Module):
             return mask, features
         else:
             return mask
+
+
+class LossPredictionModule(nn.Module):
+    """
+    Loss Prediction Module for Learning Loss Active Learning.
+
+    This module takes multi-level features from the target model and predicts
+    the loss value without requiring ground truth labels.
+
+    Reference: "Learning Loss for Active Learning" (CVPR 2019)
+    """
+
+    def __init__(self, feature_dims, hidden_dim=128):
+        """
+        Args:
+            feature_dims: List of feature dimensions from different layers
+            hidden_dim: Hidden dimension for FC layers
+        """
+        super().__init__()
+
+        self.feature_dims = feature_dims
+        self.hidden_dim = hidden_dim
+
+        # Process each feature level: GAP -> FC -> ReLU
+        self.feature_processors = nn.ModuleList()
+        for dim in feature_dims:
+            processor = nn.Sequential(
+                nn.AdaptiveAvgPool2d(1),  # Global Average Pooling
+                nn.Flatten(),
+                nn.Linear(dim, hidden_dim),
+                nn.ReLU(inplace=True)
+            )
+            self.feature_processors.append(processor)
+
+        # Concatenate all processed features
+        total_dim = hidden_dim * len(feature_dims)
+
+        # Final FC layer to predict loss (scalar)
+        self.fc = nn.Linear(total_dim, 1)
+
+    def forward(self, features_list):
+        """
+        Args:
+            features_list: List of feature maps from different layers
+                Each feature map: [B, C, H, W]
+
+        Returns:
+            predicted_loss: [B, 1] - Predicted loss values
+        """
+        processed_features = []
+        for i, features in enumerate(features_list):
+            # Process each feature level
+            processed = self.feature_processors[i](features)  # [B, hidden_dim]
+            processed_features.append(processed)
+
+        # Concatenate all processed features
+        concat_features = torch.cat(processed_features, dim=1)  # [B, hidden_dim * num_levels]
+
+        # Predict loss
+        predicted_loss = self.fc(concat_features)  # [B, 1]
+
+        return predicted_loss
+
+
+class SegmentationModelWithLossPrediction(nn.Module):
+    """
+    Segmentation Model with Loss Prediction Module for LUNIT active learning.
+
+    This wrapper adds a loss prediction module to the base segmentation model,
+    enabling joint training of both the target model and loss prediction module.
+    """
+
+    def __init__(self, base_model, feature_dims=None, hidden_dim=128):
+        """
+        Args:
+            base_model: Base segmentation model (SegmentationModel)
+            feature_dims: List of feature dimensions from different layers
+                         If None, will try to infer from model
+            hidden_dim: Hidden dimension for loss prediction module
+        """
+        super().__init__()
+
+        self.base_model = base_model
+
+        # Extract multi-level features from SMP models
+        if hasattr(base_model.model, 'encoder'):
+            # For SMP models, encoder returns features from multiple stages
+            self.use_encoder_features = True
+            if feature_dims is None:
+                # Try to infer feature dimensions
+                encoder = base_model.model.encoder
+                if hasattr(encoder, 'out_channels'):
+                    # Get output channels from each stage
+                    out_channels = encoder.out_channels
+                    # Use last 3-4 stages
+                    feature_dims = out_channels[-3:] if len(out_channels) >= 3 else out_channels
+                else:
+                    # Default fallback
+                    feature_dims = [256, 512, 1024]
+        else:
+            self.use_encoder_features = False
+            if feature_dims is None:
+                feature_dims = [256, 512, 1024]  # Default
+
+        # Create loss prediction module
+        self.loss_prediction_module = LossPredictionModule(feature_dims, hidden_dim)
+
+    def forward(self, x, return_loss_prediction=False, return_features=False):
+        """
+        Forward pass with optional loss prediction.
+
+        Args:
+            x: Input tensor [B, 3, 512, 512]
+            return_loss_prediction: Whether to return predicted loss
+            return_features: Whether to return features (for compatibility)
+
+        Returns:
+            mask: Segmentation mask [B, 1, 512, 512]
+            predicted_loss: Optional [B, 1] if return_loss_prediction=True
+            features: Optional features if return_features=True
+        """
+        # Get base model prediction
+        if return_features:
+            mask, features = self.base_model(x, return_features=True)
+        else:
+            mask = self.base_model(x)
+
+        # Extract multi-level features for loss prediction
+        if return_loss_prediction:
+            if self.use_encoder_features and hasattr(self.base_model.model, 'encoder'):
+                # Get encoder features from multiple stages
+                encoder_output = self.base_model.model.encoder(x)
+                if isinstance(encoder_output, (list, tuple)):
+                    # Use last 3-4 feature maps
+                    feature_maps = encoder_output[-3:] if len(encoder_output) >= 3 else encoder_output
+                else:
+                    # Single output, use it
+                    feature_maps = [encoder_output]
+            else:
+                # Fallback: use intermediate decoder features if available
+                # For now, create dummy features (this is a limitation)
+                batch_size = x.shape[0]
+                device = x.device
+                # Create dummy multi-level features
+                feature_maps = [
+                    torch.randn(batch_size, 256, 32, 32, device=device),
+                    torch.randn(batch_size, 512, 16, 16, device=device),
+                    torch.randn(batch_size, 1024, 8, 8, device=device),
+                ]
+
+            # Predict loss using loss prediction module
+            predicted_loss = self.loss_prediction_module(feature_maps)  # [B, 1]
+
+            if return_features:
+                return mask, predicted_loss, features
+            else:
+                return mask, predicted_loss
+        else:
+            if return_features:
+                return mask, features
+            else:
+                return mask
