@@ -13,5 +13,6 @@ __pycache__
 *.jpeg
 *.tiff
 *.xlsx
+*.md
 
 baselines
