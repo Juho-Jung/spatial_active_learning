@@ -36,6 +36,22 @@ except ImportError:
     # Fallback if TAUDIS is not available
     select_samples_TAUDIS = None
 
+# Import ALUNET strategies (MIDL 2024)
+try:
+    from .sample_selection_alunet import (select_samples_mcd_alunet,
+                                          select_samples_usimc)
+except ImportError:
+    # Fallback if ALUNET strategies are not available
+    select_samples_usimc = None
+    select_samples_mcd_alunet = None
+
+# Import LUNIT strategy (Learning Loss, CVPR 2019)
+try:
+    from .sample_selection_lunit import select_samples_lunit
+except ImportError:
+    # Fallback if LUNIT is not available
+    select_samples_lunit = None
+
 
 def create_spatial_bins(height, width, grid_width=2, grid_height=3):
     """
@@ -1156,6 +1172,11 @@ SELECTION_STRATEGIES = {
     'diversity_uncertainty': select_samples_diversity_uncertainty,
     'coreset': select_samples_coreset,
     'taudis': select_samples_TAUDIS,
+    # ALUNET strategies (MIDL 2024)
+    'usimc': select_samples_usimc,
+    'mcd_alunet': select_samples_mcd_alunet,
+    # LUNIT strategy (Learning Loss, CVPR 2019)
+    'lunit': select_samples_lunit,
     # ULTRA AGGRESSIVE versions
     'adaptive_ultra': select_samples_adaptive_ultra,
     'adaptive_improved_ultra': select_samples_adaptive_improved_ultra,

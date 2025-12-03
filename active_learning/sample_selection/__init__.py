@@ -14,7 +14,10 @@ from .sample_selection import (SELECTION_STRATEGIES, create_spatial_bins,
                                select_samples_random,
                                select_samples_uncertainty,
                                select_samples_uncertainty_area)
+from .sample_selection_alunet import (select_samples_mcd_alunet,
+                                      select_samples_usimc)
 from .sample_selection_coreset import select_samples_coreset
+from .sample_selection_lunit import select_samples_lunit
 from .sample_selection_TAUDIS import select_samples_TAUDIS
 from .sample_selection_ultra import (
     select_samples_adaptive_improved_ultra,
@@ -32,6 +35,9 @@ __all__ = [
     'select_samples_diversity_uncertainty',
     'select_samples_coreset',
     'select_samples_TAUDIS',
+    'select_samples_usimc',
+    'select_samples_mcd_alunet',
+    'select_samples_lunit',
     'get_selection_strategy',
     'SELECTION_STRATEGIES'
 ]

@@ -29,7 +29,8 @@ from losses import combo_loss
 from metrics import (calculate_bin_dice_metrics, calculate_metrics,
                      calculate_performance_coverage,
                      calculate_spatial_consistency, divide_image_into_areas)
-from models import MCDropoutSAMModel, SAMLesionModel, SegmentationModel
+from models import (MCDropoutSAMModel, SAMLesionModel, SegmentationModel,
+                    SegmentationModelWithLossPrediction)
 from sample_selection import create_spatial_bins, get_selection_strategy
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, WeightedRandomSampler
@@ -58,6 +59,10 @@ def _parse_arguments():
                                  'adaptive_multi_scale', 'adaptive_performance_monitoring',
                                  'diversity', 'diversity_uncertainty',
                                  'coreset', 'taudis',
+                                 # ALUNET strategies (MIDL 2024)
+                                 'usimc', 'mcd_alunet',
+                                 # LUNIT strategy (Learning Loss, CVPR 2019)
+                                 'lunit',
                                  # ULTRA AGGRESSIVE versions
                                  'adaptive_ultra', 'adaptive_improved_ultra',
                                  'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra'],
@@ -74,7 +79,7 @@ def _parse_arguments():
     parser.add_argument('--round_num', type=int, default=10, help='Number of AL rounds')
     parser.add_argument('--num_samples', type=int, default=20, help='Samples per round')
     parser.add_argument('--train_epochs', type=int, default=150, help='Training epochs per round')
-    parser.add_argument('--batch_size', type=int, default=8, help='Batch size')
+    parser.add_argument('--batch_size', type=int, default=16, help='Batch size')
     parser.add_argument('--gpu_id', type=int, default=0, help='GPU ID')
     parser.add_argument(
         '--output_dir', default='/team/team_pxi/workspace/juhojung/spatial_active_learning/al_results', help='Output directory')
@@ -219,7 +224,22 @@ def _create_random_split_datasets(args):
 
 def _create_model_for_uncertainty(args, device, previous_round_model_path=None):
     """Create model for uncertainty calculation."""
-    if args.uncertainty_type == 'base':
+    if args.mode == 'lunit':
+        # For LUNIT, create model with loss prediction module
+        print("🔄 Creating segmentation model with loss prediction module for LUNIT...")
+        base_model = SegmentationModel(args.model_type, device).to(device)
+        model = SegmentationModelWithLossPrediction(base_model).to(device)
+        # Load previous round checkpoint if available
+        if previous_round_model_path and os.path.exists(previous_round_model_path):
+            try:
+                checkpoint = torch.load(previous_round_model_path, map_location=device)
+                state_dict = checkpoint.get('model_state_dict', checkpoint)
+                model.load_state_dict(state_dict, strict=False)
+                print(f"📥 Loaded previous round model weights from: {previous_round_model_path}")
+            except Exception as e:
+                print(f"⚠️ Failed to load previous round model from {previous_round_model_path}: {e}")
+        return model
+    elif args.uncertainty_type == 'base':
         print("🔄 Creating SAM model for uncertainty calculation...")
         return SAMLesionModel(args.sam_checkpoint, args.vit_model).to(device)
     elif args.uncertainty_type == 'none':
@@ -243,7 +263,12 @@ def _create_model_for_uncertainty(args, device, previous_round_model_path=None):
 
 def _create_model_for_training(args, device):
     """Create model for training."""
-    if args.uncertainty_type == 'mc_dropout' and (args.mode == 'uncertainty' or args.mode == 'uncertainty_area'):
+    if args.mode == 'lunit':
+        # For LUNIT, create model with loss prediction module
+        print("🔄 Creating segmentation model with loss prediction module for LUNIT training...")
+        base_model = SegmentationModel(args.model_type, device).to(device)
+        return SegmentationModelWithLossPrediction(base_model).to(device)
+    elif args.uncertainty_type == 'mc_dropout' and (args.mode == 'uncertainty' or args.mode == 'uncertainty_area'):
         print("🔄 Creating MC Dropout SAM model for training...")
         return MCDropoutSAMModel(args.sam_checkpoint, args.vit_model).to(device)
     elif args.uncertainty_type == 'none':
@@ -258,6 +283,7 @@ def _calculate_uncertainties(args, model, full_dataset, pool_indices, selected_i
     """Calculate uncertainties for sample selection."""
     if args.mode not in ['uncertainty', 'uncertainty_area', 'adaptive', 'adaptive_improved', 'adaptive_multi_scale', 'adaptive_performance_monitoring', 'diversity', 'diversity_uncertainty',
                          'coreset', 'taudis',
+                         'usimc', 'mcd_alunet', 'lunit',
                          'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra']:
         return None
 
@@ -365,6 +391,26 @@ def _select_samples(args, pool_indices, uncertainties, selected_indices, areas, 
         sigma = getattr(args, 'taudis_sigma', 0.8)
         return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
                               areas, features, probs, alpha, beta, sigma, first_round_seed)
+    elif args.mode == 'usimc':
+        # For USIMC, we need model and dataloader for gradient computation
+        # Note: This requires model and dataloader to be passed via args
+        model = getattr(args, 'model', None)
+        dataloader = getattr(args, 'dataloader', None)
+        device = getattr(args, 'device', None)
+        features = getattr(args, 'features', None)  # Not used, but kept for compatibility
+        return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
+                              areas, features, model, dataloader, device, first_round_seed)
+    elif args.mode == 'mcd_alunet':
+        # MCD_ALUNET is similar to uncertainty selection with MC Dropout
+        return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
+                              areas, first_round_seed)
+    elif args.mode == 'lunit':
+        # For LUNIT, we need model with loss prediction module and dataloader
+        model = getattr(args, 'model', None)
+        dataloader = getattr(args, 'dataloader', None)
+        device = getattr(args, 'device', None)
+        return selection_func(pool_indices, filtered_uncertainties, args.num_samples, selected_indices,
+                              model, dataloader, device, first_round_seed)
     elif args.mode == 'adaptive':
         # For adaptive selection, we need additional parameters
         # These should be passed from the main function or computed here
@@ -576,6 +622,7 @@ def main():
         if args.mode in ['uncertainty', 'uncertainty_area', 'adaptive', 'adaptive_improved',
                          'adaptive_multi_scale', 'adaptive_performance_monitoring', 'diversity', 'diversity_uncertainty',
                          'coreset', 'taudis',
+                         'usimc', 'mcd_alunet',
                          'adaptive_ultra', 'adaptive_improved_ultra', 'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra']:
             model = _create_model_for_uncertainty(args, device, previous_round_model_path)
             uncertainty_data = _calculate_uncertainties(
@@ -607,6 +654,35 @@ def main():
                 args.probs = uncertainty_data.get('predictions', None)  # Predictions for instance extraction
                 if args.probs is None:
                     print("⚠️ TAUDIS: No predictions found in uncertainty_data. Falling back to uncertainty selection.")
+            elif args.mode == 'usimc':
+                # For USIMC, we need model and dataloader for gradient computation
+                # Only compute gradients for available (unselected) samples
+                available_indices = [idx for idx in pool_indices if idx not in selected_indices]
+                args.model = model
+                temp_dataset = torch.utils.data.Subset(full_dataset, available_indices)
+                args.dataloader = DataLoader(temp_dataset, batch_size=args.batch_size, shuffle=False)
+                args.device = device
+                # Extract uncertainties if available
+                if uncertainty_data is not None:
+                    uncertainties = uncertainty_data if not isinstance(
+                        uncertainty_data, dict) else uncertainty_data.get('uncertainties', uncertainty_data)
+                else:
+                    # First round: uncertainties will be None, but we still need model/dataloader
+                    uncertainties = None
+            elif args.mode == 'mcd_alunet':
+                # MCD_ALUNET uses MC Dropout uncertainties
+                uncertainties = uncertainty_data if not isinstance(
+                    uncertainty_data, dict) else uncertainty_data.get('uncertainties', uncertainty_data)
+            elif args.mode == 'lunit':
+                # For LUNIT, we need model with loss prediction module and dataloader
+                # Only compute loss predictions for available (unselected) samples
+                available_indices = [idx for idx in pool_indices if idx not in selected_indices]
+                args.model = model
+                temp_dataset = torch.utils.data.Subset(full_dataset, available_indices)
+                args.dataloader = DataLoader(temp_dataset, batch_size=args.batch_size, shuffle=False)
+                args.device = device
+                # Uncertainties not used for LUNIT (loss prediction module predicts loss directly)
+                uncertainties = None
             else:
                 uncertainties = uncertainty_data
 
