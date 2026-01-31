@@ -16,3 +16,6 @@ __pycache__
 *.md
 
 baselines
+analysis
+paper
+fewshot_sam_cal
