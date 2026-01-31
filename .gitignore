@@ -14,8 +14,8 @@ __pycache__
 *.tiff
 *.xlsx
 *.md
+!README.md
 
 baselines
-analysis
 paper
 fewshot_sam_cal
