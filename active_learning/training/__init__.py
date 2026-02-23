@@ -16,7 +16,8 @@ from .training import (
     _calculate_performance_coverage,
     _log_epoch_metrics,
     _save_model_checkpoint,
-    _log_round_completion
+    _log_round_completion,
+    detection_collate_fn,
 )
 
 __all__ = [
@@ -29,5 +30,6 @@ __all__ = [
     '_calculate_performance_coverage',
     '_log_epoch_metrics',
     '_save_model_checkpoint',
-    '_log_round_completion'
+    '_log_round_completion',
+    'detection_collate_fn',
 ]
