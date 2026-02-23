@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Dataset classes for SAM adaptation project.
+Dataset classes for active learning (segmentation and detection).
 """
 
 import json
 import os
-# Add project root to path
 import sys
 from pathlib import Path
 
@@ -17,12 +16,15 @@ import torch
 import utils.image_io as image_io
 from torch.utils.data import Dataset
 
-sys.path.append('/opt/pxi')
+# Project root (parent of active_learning/); label data under data/labels/
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_LABEL_DATA_ROOT = _PROJECT_ROOT / "data" / "labels"
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 
-class SAMLesionDataset(Dataset):
-
-    """Dataset for SAM-based lesion segmentation."""
+class LesionDataset(Dataset):
+    """Dataset for lesion segmentation."""
 
     def __init__(self, collection_name="validation_internal", target_size=(512, 512),
                  split='train', train_collection='validation_collection', limit=None, target_lesion='calcification'):
@@ -45,7 +47,7 @@ class SAMLesionDataset(Dataset):
         # Calculate weights for weighted sampling
         self._calculate_weights()
 
-        print(f"📊 {split.capitalize()} Dataset Statistics:")
+        print(f"{split.capitalize()} dataset statistics:")
         print(f"   Total documents: {len(self.documents)}")
         self._print_statistics()
 
@@ -80,80 +82,158 @@ class SAMLesionDataset(Dataset):
             if data_source not in excluded_sources:
                 documents.append(doc)
 
-        print(f"📊 Validation Collection: {len(all_docs)} -> {len(documents)} (after filtering)")
+        print(f"Validation collection: {len(all_docs)} -> {len(documents)} (after filtering)")
         return documents
 
     def _load_train_documents(self):
         """Load documents from train collection with consensus annotations."""
         collection = mdb_c.get_collection("train", db_names=['cxr_new', 'projects', 'public'])
 
-        # Query for documents with target lesion findings
-        if self.target_lesion == 'calcification' or self.target_lesion == 'calcifiednodule':
+        # Handle multiple target lesions
+        if isinstance(self.target_lesion, list):
+            target_lesions = self.target_lesion
+        else:
+            target_lesions = [self.target_lesion]
+
+        # Query for documents with target lesion findings (OR condition: any of the lesions)
+        if 'calcification' in target_lesions or 'calcifiednodule' in target_lesions:
+            # Special handling for calcification
             query = {
-                'labeled_findings': {'$all': ['calcification']},
+                'labeled_findings': {'$in': ['calcification']},
                 'objects.finding_name': {'$in': ['calcification']}}
         else:
             query = {
-                'labeled_findings': {'$all': [self.target_lesion]},
-                'objects.finding_name': {'$in': [self.target_lesion]}}
+                'labeled_findings': {'$in': target_lesions},
+                'objects.finding_name': {'$in': target_lesions}}
 
         excluded_sources = ["amcio_b1_368"]
         query['data_source'] = {'$nin': excluded_sources}
 
         documents = list(collection.find(query).sort('_id', 1))  # Sort by _id for consistent ordering
 
-        if self.target_lesion == 'calcifiednodule':
-            first_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/calcifiednodule/converted_mdb_data_calcifiednodule_1st_round.json"
-            second_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/calcifiednodule/converted_mdb_data_calcifiednodule_2nd_round.json"
-            if not os.path.exists(first_round_path):
-                print(
-                    f"   Warning: converted_mdb_data_calcifiednodule_1st_round.json not found at {first_round_path}")
-                return {}
-            with open(first_round_path, 'r') as f:
-                converted_data_first_round = json.load(f)
-            print(f"   Loaded {len(converted_data_first_round)} entries from converted_mdb_data_calcifiednodule_1st_round.json")
+        # Normalize target_lesion to string for comparison
+        target = self.target_lesion[0] if isinstance(self.target_lesion, list) else self.target_lesion
 
-            if not os.path.exists(second_round_path):
-                print(
-                    f"   Warning: converted_mdb_data_calcifiednodule_2nd_round.json not found at {second_round_path}")
-                return {}
-            with open(second_round_path, 'r') as f:
-                converted_data_second_round = json.load(f)
+        if target == 'calcification':
+            first_round_path = _LABEL_DATA_ROOT / "aortic_calcification" / "converted_mdb_data_1st_round.json"
+            second_round_path = _LABEL_DATA_ROOT / "aortic_calcification" / "converted_mdb_data_2nd_round.json"
+            third_round_path = _LABEL_DATA_ROOT / "aortic_calcification" / "converted_mdb_data_3rd_round.json"
+        elif target == 'calcifiednodule':
+            first_round_path = _LABEL_DATA_ROOT / "calcifiednodule" / "converted_mdb_data_calcifiednodule_1st_round.json"
+            second_round_path = _LABEL_DATA_ROOT / "calcifiednodule" / "converted_mdb_data_calcifiednodule_2nd_round.json"
+        else:
+            return []  # Return empty list instead of dict for concatenation
+
+        calcification_dir = _LABEL_DATA_ROOT / "calcification"
+        gangnam_severance_first_round_path = calcification_dir / "converted_mdb_gangnam_severance_1st_round.json"
+        caln_negative_first_round_path = calcification_dir / "converted_mdb_caln_negative_1st_round.json"
+        caln_negative_second_round_path = calcification_dir / "converted_mdb_caln_negative_2nd_round.json"
+        caln_negative_third_round_complete_28_case_path = calcification_dir / "converted_mdb_caln_negative_3rd_round_complete_28case.json"
+        caln_negative_third_round_path = calcification_dir / "converted_mdb_caln_negative_3rd_round.json"
+        caln_positive_first_round_path = calcification_dir / "converted_mdb_caln_positive_1st_round.json"
+
+        # Load caln_positive_first_round
+        if not caln_positive_first_round_path.exists():
+            print(f"   Warning: {caln_positive_first_round_path} not found")
+            converted_data_caln_positive_first_round = {}
+        else:
+            with open(caln_positive_first_round_path, encoding='utf-8') as f:
+                converted_data_caln_positive_first_round = json.load(f)
+            print(f"   Loaded {len(converted_data_caln_positive_first_round)} entries from caln_positive_first_round")
+
+        # Load gangnam_severance_first_round
+        if not gangnam_severance_first_round_path.exists():
+            print(f"   Warning: {gangnam_severance_first_round_path} not found")
+            converted_data_gangnam_severance_first_round = {}
+        else:
+            with open(gangnam_severance_first_round_path, encoding='utf-8') as f:
+                converted_data_gangnam_severance_first_round = json.load(f)
+            print(f"   Loaded {len(converted_data_gangnam_severance_first_round)} entries from gangnam_severance_first_round")
+
+        # Load caln_negative_first_round
+        if not caln_negative_first_round_path.exists():
+            print(f"   Warning: {caln_negative_first_round_path} not found")
+            converted_data_caln_negative_first_round = {}
+        else:
+            with open(caln_negative_first_round_path, encoding='utf-8') as f:
+                converted_data_caln_negative_first_round = json.load(f)
+            print(f"   Loaded {len(converted_data_caln_negative_first_round)} entries from caln_negative_first_round")
+
+        # Load caln_negative_third_round_complete_28_case
+        if not caln_negative_third_round_complete_28_case_path.exists():
+            print(f"   Warning: {caln_negative_third_round_complete_28_case_path} not found")
+            converted_data_caln_negative_third_round_complete_28_case = {}
+        else:
+            with open(caln_negative_third_round_complete_28_case_path, encoding='utf-8') as f:
+                converted_data_caln_negative_third_round_complete_28_case = json.load(f)
             print(
-                f"   Loaded {len(converted_data_second_round)} entries from converted_mdb_data_calcifiednodule_2nd_round.json")
+                f"   Loaded {len(converted_data_caln_negative_third_round_complete_28_case)} entries from caln_negative_third_round_complete_28_case")
 
-            converted_data = {**converted_data_first_round, **converted_data_second_round}
+        # Load caln_negative_second_round
+        if not caln_negative_second_round_path.exists():
+            print(f"   Warning: {caln_negative_second_round_path} not found")
+            converted_data_caln_negative_second_round = {}
+        else:
+            with open(caln_negative_second_round_path, encoding='utf-8') as f:
+                converted_data_caln_negative_second_round = json.load(f)
+            print(f"   Loaded {len(converted_data_caln_negative_second_round)} entries from caln_negative_second_round")
 
-        elif self.target_lesion == 'calcification':
-            first_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/aortic_calcification/converted_mdb_data_1st_round.json"
-            second_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/aortic_calcification/converted_mdb_data_2nd_round.json"
-            third_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/aortic_calcification/converted_mdb_data_3rd_round.json"
+        # Load caln_negative_third_round
+        if not caln_negative_third_round_path.exists():
+            print(f"   Warning: {caln_negative_third_round_path} not found")
+            converted_data_caln_negative_third_round = {}
+        else:
+            with open(caln_negative_third_round_path, encoding='utf-8') as f:
+                converted_data_caln_negative_third_round = json.load(f)
+            print(f"   Loaded {len(converted_data_caln_negative_third_round)} entries from caln_negative_third_round")
 
-            if not os.path.exists(first_round_path):
-                print(
-                    f"   Warning: converted_mdb_data_1st_round.json not found at {first_round_path}")
-                return {}
-            with open(first_round_path, 'r') as f:
+        # Load first round
+        if not first_round_path.exists():
+            print(f"   Warning: {first_round_path} not found")
+            converted_data_first_round = {}
+        else:
+            with open(first_round_path, encoding='utf-8') as f:
                 converted_data_first_round = json.load(f)
-            print(f"   Loaded {len(converted_data_first_round)} entries from converted_mdb_data_1st_round.json")
+            print(f"   Loaded {len(converted_data_first_round)} entries from first round")
 
-            if not os.path.exists(second_round_path):
-                print(
-                    f"   Warning: converted_mdb_data_2nd_round.json not found at {second_round_path}")
-                return {}
-            with open(second_round_path, 'r') as f:
+        # Load second round
+        if not second_round_path.exists():
+            print(f"   Warning: {second_round_path} not found")
+            converted_data_second_round = {}
+        else:
+            with open(second_round_path, encoding='utf-8') as f:
                 converted_data_second_round = json.load(f)
-            print(f"   Loaded {len(converted_data_second_round)} entries from converted_mdb_data_2nd_round.json")
+            print(f"   Loaded {len(converted_data_second_round)} entries from second round")
 
-            if not os.path.exists(third_round_path):
-                print(
-                    f"   Warning: converted_mdb_data_3rd_round.json not found at {third_round_path}")
-                return {}
-            with open(third_round_path, 'r') as f:
-                converted_data_third_round = json.load(f)
-            print(f"   Loaded {len(converted_data_third_round)} entries from converted_mdb_data_3rd_round.json")
+        # Load third round for aortic calcification
+        if target == 'calcification':
+            if not third_round_path.exists():
+                print(f"   Warning: {third_round_path} not found")
+                converted_data_third_round = {}
+            else:
+                with open(third_round_path, encoding='utf-8') as f:
+                    converted_data_third_round = json.load(f)
+                print(f"   Loaded {len(converted_data_third_round)} entries from third round")
 
-            converted_data = {**converted_data_first_round, **converted_data_second_round, **converted_data_third_round}
+            converted_data = {**converted_data_first_round,
+                              **converted_data_second_round,
+                              **converted_data_third_round,
+                              **converted_data_gangnam_severance_first_round,
+                              **converted_data_caln_positive_first_round,
+                              **converted_data_caln_negative_first_round,
+                              **converted_data_caln_negative_second_round,
+                              **converted_data_caln_negative_third_round_complete_28_case,
+                              **converted_data_caln_negative_third_round}
+
+        else:
+            converted_data = {**converted_data_first_round,
+                              **converted_data_second_round,
+                              **converted_data_gangnam_severance_first_round,
+                              **converted_data_caln_positive_first_round,
+                              **converted_data_caln_negative_first_round,
+                              **converted_data_caln_negative_second_round,
+                              **converted_data_caln_negative_third_round_complete_28_case,
+                              **converted_data_caln_negative_third_round}
 
         # Create mapping from path_dicom stem to doc
         doc_mapping = {}
@@ -161,7 +241,7 @@ class SAMLesionDataset(Dataset):
             if 'path_dicom' not in doc:
                 continue
             try:
-                # Extract stem from path_dicom (e.g., "0064493-0000345" from "pxi-dataset/cxr/private/internal/210124_nipa/dicom/0064493-0000345.dcm")
+                # Extract stem from path_dicom (e.g. "0064493-0000345" from "dataset/cxr/.../0064493-0000345.dcm")
                 path_dicom = doc['path_dicom']
                 stem = Path(path_dicom).stem
                 doc_mapping[stem] = doc
@@ -195,6 +275,9 @@ class SAMLesionDataset(Dataset):
                         # Check if this document has consensus annotations
                         if 'consensus' in converted_data[json_key] and converted_data[json_key]['consensus']:
                             consensus_annotations = converted_data[json_key]['consensus']
+                            # Handle dict or list format
+                            if isinstance(consensus_annotations, dict):
+                                consensus_annotations = [consensus_annotations]
 
                             # exclude "finding_name": "Excluded"
                             for annotation in consensus_annotations:
@@ -207,18 +290,19 @@ class SAMLesionDataset(Dataset):
                             consensus_objects = []
                             for annotation in consensus_annotations:
                                 for obj in annotation.get('objects', []):
-                                    if self.target_lesion == 'calcification' and obj.get('finding_name') == 'Aorta Calcification':
-                                        consensus_objects.append({'finding_name': 'calcification',
-                                                                  'polygon': obj.get('polygon'),
-                                                                  'confidence': obj.get('confidence'),
-                                                                  'remark': obj.get('remark', '')
-                                                                  })
-                                    elif self.target_lesion == 'calcifiednodule' and obj.get('finding_name') == 'Calcified Nodule':
-                                        consensus_objects.append({'finding_name': 'calcifiednodule',
-                                                                  'polygon': obj.get('polygon'),
-                                                                  'confidence': obj.get('confidence'),
-                                                                  'remark': obj.get('remark', '')
-                                                                  })
+                                    finding = obj.get('finding_name') or ''
+                                    if target == 'calcification':
+                                        if finding in {'Aorta Calcification', 'aortic calcification'}:
+                                            consensus_objects.append({'finding_name': 'calcification',
+                                                                      'polygon': obj.get('polygon'),
+                                                                      'confidence': obj.get('confidence'),
+                                                                      'remark': obj.get('remark', '')})
+                                    elif target == 'calcifiednodule':
+                                        if finding in {'Calcified Nodule', 'calcified nodule', 'calcified lymph node', 'pleural calcification'}:
+                                            consensus_objects.append({'finding_name': 'calcifiednodule',
+                                                                      'polygon': obj.get('polygon'),
+                                                                      'confidence': obj.get('confidence'),
+                                                                      'remark': obj.get('remark', '')})
 
                             if consensus_objects:
                                 # Create a copy of the document with updated objects (positive sample)
@@ -258,7 +342,7 @@ class SAMLesionDataset(Dataset):
         np.random.seed(42)
         np.random.shuffle(filtered_docs)
 
-        print(f"📊 Train Collection: {len(filtered_docs)} (after filtering)")
+        print(f"Train collection: {len(filtered_docs)} (after filtering)")
         return filtered_docs
 
     def _load_sdc_ppm_train_documents(self):
@@ -273,7 +357,7 @@ class SAMLesionDataset(Dataset):
 
         documents = list(collection.find(query).sort('_id', 1))  # Sort by _id for consistent ordering
 
-        print(f"📊 Train Collection: {len(documents)}")
+        print(f"Train collection: {len(documents)}")
         return documents
 
     def _create_split(self):
@@ -281,11 +365,17 @@ class SAMLesionDataset(Dataset):
         positive_docs = []
         negative_docs = []
 
+        # Handle multiple target lesions
+        if isinstance(self.target_lesion, list):
+            target_lesions = self.target_lesion
+        else:
+            target_lesions = [self.target_lesion]
+
         for doc in self.documents:
             objects = doc.get('objects', [])
             has_target_lesion = False
             for obj in objects:
-                if obj.get('finding_name') == self.target_lesion:
+                if obj.get('finding_name') in target_lesions:
                     has_target_lesion = True
                     break
 
@@ -303,7 +393,7 @@ class SAMLesionDataset(Dataset):
 
         # Apply limit if specified
         if self.limit is not None and len(self.documents) > self.limit:
-            print(f"📊 Limiting dataset to {self.limit} samples (from {len(self.documents)})")
+            print(f"Limiting dataset to {self.limit} samples (from {len(self.documents)})")
             self.documents = self.documents[:self.limit]
 
     def _setup_transforms(self):
@@ -332,12 +422,18 @@ class SAMLesionDataset(Dataset):
 
     def _calculate_weights(self):
         """Calculate weights for weighted sampling."""
+        # Handle multiple target lesions
+        if isinstance(self.target_lesion, list):
+            target_lesions = self.target_lesion
+        else:
+            target_lesions = [self.target_lesion]
+
         self.weights = []
         for doc in self.documents:
             objects = doc.get('objects', [])
             has_target_lesion = False
             for obj in objects:
-                if obj.get('finding_name') == self.target_lesion:
+                if obj.get('finding_name') in target_lesions:
                     has_target_lesion = True
                     break
 
@@ -348,6 +444,12 @@ class SAMLesionDataset(Dataset):
 
     def _print_statistics(self):
         """Print dataset statistics."""
+        # Handle multiple target lesions
+        if isinstance(self.target_lesion, list):
+            target_lesions = self.target_lesion
+        else:
+            target_lesions = [self.target_lesion]
+
         positive_samples = 0
         negative_samples = 0
 
@@ -355,7 +457,7 @@ class SAMLesionDataset(Dataset):
             objects = doc.get('objects', [])
             has_target_lesion = False
             for obj in objects:
-                if obj.get('finding_name') == self.target_lesion:
+                if obj.get('finding_name') in target_lesions:
                     has_target_lesion = True
                     break
 
@@ -367,7 +469,10 @@ class SAMLesionDataset(Dataset):
         total = positive_samples + negative_samples
         print(f"   Positive samples: {positive_samples}")
         print(f"   Negative samples: {negative_samples}")
-        print(f"   Positive ratio: {positive_samples / total * 100:.2f}%")
+        if total > 0:
+            print(f"   Positive ratio: {positive_samples / total * 100:.2f}%")
+        else:
+            print(f"   Positive ratio: N/A (no samples)")
         print("=" * 50)
 
     def __len__(self):
@@ -394,12 +499,18 @@ class SAMLesionDataset(Dataset):
         import cv2
         image = cv2.resize(image, (self.target_size[1], self.target_size[0]))
 
+        # Handle multiple target lesions
+        if isinstance(self.target_lesion, list):
+            target_lesions = self.target_lesion
+        else:
+            target_lesions = [self.target_lesion]
+
         # Create mask
         mask = np.zeros(self.target_size, dtype=np.uint8)
         objects = doc.get('objects', [])
 
         for obj in objects:
-            if obj.get('finding_name') == self.target_lesion:
+            if obj.get('finding_name') in target_lesions:
                 polygon = obj.get('polygon')
                 if polygon:
                     try:
@@ -454,12 +565,18 @@ def divide_image_into_areas(image_size=(512, 512), grid_width=2, grid_height=3):
 def _get_mask_from_doc(doc, target_lesion, target_size=(512, 512)):
     """Helper function to extract mask from document using the same logic as dataset."""
     try:
-        # Create mask using the same logic as SAMLesionDataset.__getitem__
+        # Handle multiple target lesions
+        if isinstance(target_lesion, list):
+            target_lesions = target_lesion
+        else:
+            target_lesions = [target_lesion]
+
+        # Create mask using the same logic as LesionDataset.__getitem__
         mask = np.zeros(target_size, dtype=np.uint8)
         objects = doc.get('objects', [])
 
         for obj in objects:
-            if obj.get('finding_name') == target_lesion:
+            if obj.get('finding_name') in target_lesions:
                 polygon = obj.get('polygon')
                 if polygon:
                     try:
@@ -475,17 +592,17 @@ def _get_mask_from_doc(doc, target_lesion, target_size=(512, 512)):
                             import cv2
                             cv2.fillPoly(mask, [coords], 1)
                     except Exception as e:
-                        print(f"⚠️  Error creating mask from polygon: {e}")
+                        print(f"Error creating mask from polygon: {e}")
                         continue
 
         return mask.astype(np.float32)
 
     except Exception as e:
-        print(f"⚠️  Error extracting mask from document: {e}")
+        print(f"Error extracting mask from document: {e}")
         return None
 
 
-def create_spatial_validation_split(documents, target_lesion, num_samples_per_round, num_rounds, areas=None, seed=42, num_validation_samples=None, validation_mode='spatial_equal_split'):
+def create_spatial_validation_split(documents, target_lesion, num_samples_per_round, num_rounds, areas=None, seed=42, num_validation_samples=None, validation_mode='spatial_equal_split', include_negative=False):
     """
     Create validation split ensuring spatial distribution across areas.
 
@@ -505,6 +622,7 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
         seed: Random seed for reproducibility
         num_validation_samples: Number of validation samples (if None, use remaining samples)
         validation_mode: Validation split mode ('spatial_equal_split' or 'spatial_dynamic_split')
+        include_negative: If True, include ALL negative samples (images without target lesion)
 
     Returns:
         train_docs, val_docs: Lists of documents for train and validation
@@ -514,31 +632,43 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
 
     np.random.seed(seed)
 
-    # Filter positive documents (with target lesion)
+    # Handle multiple target lesions
+    if isinstance(target_lesion, list):
+        target_lesions = target_lesion
+    else:
+        target_lesions = [target_lesion]
+
+    # Separate positive and negative documents
     positive_docs = []
+    negative_docs = []
     for doc in documents:
         objects = doc.get('objects', [])
         has_target_lesion = False
         for obj in objects:
-            if obj.get('finding_name') == target_lesion:
+            if obj.get('finding_name') in target_lesions:
                 has_target_lesion = True
                 break
         if has_target_lesion:
             positive_docs.append(doc)
+        else:
+            negative_docs.append(doc)
 
-    print(f"📊 Total positive documents: {len(positive_docs)}")
+    print(f"Total positive documents: {len(positive_docs)}")
+    print(f"Total negative documents: {len(negative_docs)}")
+    if include_negative:
+        print("Including all negative samples in dataset")
 
     # Calculate training samples
     total_training_samples = num_samples_per_round * num_rounds
-    print(f"📊 Total samples for training: {total_training_samples} ({num_samples_per_round} × {num_rounds} rounds)")
+    print(f"Total samples for training: {total_training_samples} ({num_samples_per_round} x {num_rounds} rounds)")
 
     # Determine validation samples
     if num_validation_samples is None:
         num_validation_samples = len(positive_docs) - total_training_samples
-    print(f"📊 Target validation samples: {num_validation_samples}")
+    print(f"Target validation samples: {num_validation_samples}")
 
     if num_validation_samples <= 0:
-        print("⚠️  Warning: Not enough data for validation! All data will be used for training.")
+        print("Warning: Not enough data for validation; all data will be used for training.")
         return positive_docs, []
 
     # Analyze spatial distribution of each document
@@ -566,11 +696,11 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
             doc_area_mapping[best_area_idx].append(doc)
 
         except Exception as e:
-            print(f"⚠️  Warning: Could not process document {doc.get('_id', 'unknown')}: {e}")
+            print(f"Warning: Could not process document {doc.get('_id', 'unknown')}: {e}")
             continue
 
     # Print area distribution
-    print("📊 Document distribution by spatial areas:")
+    print("Document distribution by spatial areas:")
     for i, docs in enumerate(doc_area_mapping):
         print(f"   Area {i + 1}: {len(docs)} documents")
 
@@ -583,7 +713,7 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
         target_per_area = num_validation_samples // len(areas)
         remaining_samples = num_validation_samples % len(areas)
 
-        print(f"📊 Target samples per area: {target_per_area} (with {remaining_samples} extra)")
+        print(f"Target samples per area: {target_per_area} (with {remaining_samples} extra)")
 
         for i, docs in enumerate(doc_area_mapping):
             # Calculate how many samples to take from this area
@@ -596,11 +726,11 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
             if len(docs) - samples_from_area < min_samples_for_training:
                 samples_from_area = max(0, len(docs) - min_samples_for_training)
                 print(
-                    f"⚠️  Area {i + 1}: Limited to {samples_from_area} samples to preserve training data (requested {target_per_area + (1 if i < remaining_samples else 0)})")
+                    f"Area {i + 1}: Limited to {samples_from_area} samples to preserve training data (requested {target_per_area + (1 if i < remaining_samples else 0)})")
             elif len(docs) < samples_from_area:
                 samples_from_area = len(docs)
                 print(
-                    f"⚠️  Area {i + 1}: Only {len(docs)} samples available (requested {target_per_area + (1 if i < remaining_samples else 0)})")
+                    f"Area {i + 1}: Only {len(docs)} samples available (requested {target_per_area + (1 if i < remaining_samples else 0)})")
 
             # Randomly sample from this area with reproducible seed
             if samples_from_area > 0:
@@ -619,7 +749,7 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
         total_docs = sum(len(docs) for docs in doc_area_mapping)
         distribution_ratios = [len(docs) / total_docs for docs in doc_area_mapping]
 
-        print(f"📊 Data distribution ratios: {[f'{ratio:.3f}' for ratio in distribution_ratios]}")
+        print(f"Data distribution ratios: {[f'{ratio:.3f}' for ratio in distribution_ratios]}")
 
         for i, (docs, ratio) in enumerate(zip(doc_area_mapping, distribution_ratios)):
             # Calculate target samples for this area based on its data ratio
@@ -632,7 +762,7 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
             min_samples_for_training = max(1, len(docs) // 2)  # Keep at least 50% for training
             if len(docs) - samples_from_area < min_samples_for_training:
                 samples_from_area = max(0, len(docs) - min_samples_for_training)
-                print(f"⚠️  Area {i + 1}: Limited to {samples_from_area} samples to preserve training data")
+                print(f"Area {i + 1}: Limited to {samples_from_area} samples to preserve training data")
 
             # Randomly sample from this area with reproducible seed
             if samples_from_area > 0:
@@ -649,7 +779,7 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
     # Handle redistribution for spatial_equal_split only
     if validation_mode == 'spatial_equal_split' and len(val_docs) < num_validation_samples:
         needed_samples = num_validation_samples - len(val_docs)
-        print(f"📊 Need {needed_samples} more samples, redistributing based on data distribution...")
+        print(f"Need {needed_samples} more samples, redistributing based on data distribution...")
 
         # Calculate distribution ratios
         total_docs = sum(len(docs) for docs in doc_area_mapping)
@@ -673,17 +803,23 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
     # Create training dataset (remaining documents)
     train_docs = [doc for doc in positive_docs if doc not in val_docs]
 
+    # Include ALL negative samples if requested
+    if include_negative:
+        train_docs.extend(negative_docs)
+        print(f"Added {len(negative_docs)} negative samples to training pool")
+
     # Shuffle the results with reproducible seed
     np.random.seed(seed + 9999)  # Use different seed for final shuffling
     np.random.shuffle(val_docs)
     np.random.shuffle(train_docs)
 
-    print(f"📊 Final split: {len(val_docs)} validation, {len(train_docs)} training samples")
+    total_docs = len(positive_docs) + (len(negative_docs) if include_negative else 0)
+    print(f"Final split: {len(val_docs)} validation, {len(train_docs)} training samples")
     print(
-        f"📊 Data utilization: {len(val_docs) + len(train_docs)}/{len(positive_docs)} ({100 * (len(val_docs) + len(train_docs)) / len(positive_docs):.1f}%)")
+        f"Data utilization: {len(val_docs) + len(train_docs)}/{total_docs} ({100 * (len(val_docs) + len(train_docs)) / total_docs:.1f}%)")
 
     # Print final area distribution
-    print("📊 Final validation samples per area:")
+    print("Final validation samples per area:")
     for i, count in enumerate(area_allocations):
         print(f"   Area {i + 1}: {count} samples")
 
@@ -708,11 +844,11 @@ def load_raw_documents(train_collection='validation_collection', target_lesion='
             if data_source not in excluded_sources:
                 documents.append(doc)
 
-        print(f"📊 Loaded {len(documents)} raw documents from validation_internal")
+        print(f"Loaded {len(documents)} raw documents from validation_internal")
         return documents
     else:
         # For other collections, create a temporary dataset to access documents
-        temp_dataset = SAMLesionDataset(
+        temp_dataset = LesionDataset(
             split='train',  # This doesn't matter for raw document loading
             train_collection=train_collection,
             target_lesion=target_lesion
@@ -720,7 +856,7 @@ def load_raw_documents(train_collection='validation_collection', target_lesion='
         return temp_dataset._load_documents()
 
 
-class SpatialSplitDataset(SAMLesionDataset):
+class SpatialSplitDataset(LesionDataset):
     """Custom dataset class that uses pre-split documents."""
 
     def __init__(self, documents, target_lesion, target_size=(512, 512)):
@@ -741,7 +877,7 @@ class SpatialSplitDataset(SAMLesionDataset):
         self._calculate_weights()
 
         # Print statistics
-        print(f"📊 Pre-split Dataset Statistics:")
+        print("Pre-split dataset statistics:")
         print(f"   Total documents: {len(self.documents)}")
         self._print_statistics()
 
@@ -750,3 +886,107 @@ class SpatialSplitDataset(SAMLesionDataset):
 
     def _create_split(self):
         pass  # Skip splitting, already done
+
+
+# =============================================================================
+# Active Learning Dataset Creation
+# =============================================================================
+
+def create_al_datasets(args):
+    """
+    Create training and validation datasets for Active Learning.
+
+    Args:
+        args: Arguments containing:
+            - dataset_source: Dataset source ('mdb' for MongoDB collections, 'vindr' for VinDr-CXR)
+            - collection: Data collection name (for MongoDB)
+            - vindr_root: Root directory for VinDr-CXR dataset
+            - target_lesion: Target lesion type
+            - validate_data_mode: Validation split mode
+            - grid_width, grid_height: Spatial grid dimensions
+            - num_samples: Samples per round
+            - round_num: Number of AL rounds
+            - seed: Random seed
+            - num_validation_samples: Number of validation samples
+
+    Returns:
+        full_dataset, val_dataset: Training pool and validation datasets
+    """
+    dataset_source = getattr(args, 'dataset_source', 'mdb').lower()
+
+    if dataset_source == 'vindr':
+        # Use VinDr-CXR public dataset
+        from .vindr_cxr_dataset import create_vindr_al_datasets
+        return create_vindr_al_datasets(args)
+    elif dataset_source == 'siim':
+        # Use SIIM-ACR Pneumothorax Segmentation dataset
+        from .siim_dataset import create_siim_al_datasets
+        return create_siim_al_datasets(args)
+    elif dataset_source == 'chestxdet10':
+        # Use ChestX-Det10 dataset
+        from .chestxdet10_dataset import create_chestxdet10_al_datasets
+        return create_chestxdet10_al_datasets(args)
+    else:
+        # Use MongoDB collections (default)
+        print(f"Loading data from {args.collection}...")
+        raw_documents = load_raw_documents(args.collection, args.target_lesion)
+
+        if args.validate_data_mode == 'random_split':
+            return _create_random_split_datasets(raw_documents, args)
+        else:
+            return _create_spatial_split_datasets(raw_documents, args)
+
+
+def _create_spatial_split_datasets(raw_documents, args):
+    """Create datasets using spatial validation split."""
+    areas = divide_image_into_areas(grid_width=args.grid_width, grid_height=args.grid_height)
+    include_negative = getattr(args, 'include_negative', False)
+    train_docs, val_docs = create_spatial_validation_split(
+        raw_documents, args.target_lesion,
+        num_samples_per_round=args.num_samples,
+        num_rounds=args.round_num,
+        areas=areas, seed=args.seed,
+        num_validation_samples=args.num_validation_samples,
+        validation_mode=args.validate_data_mode,
+        include_negative=include_negative
+    )
+    return SpatialSplitDataset(train_docs, args.target_lesion), SpatialSplitDataset(val_docs, args.target_lesion)
+
+
+def _create_random_split_datasets(raw_documents, args):
+    """Create datasets using random validation split."""
+    # Handle target_lesion as list or string
+    target_lesions = args.target_lesion if isinstance(args.target_lesion, list) else [args.target_lesion]
+    include_negative = getattr(args, 'include_negative', False)
+
+    # Separate positive and negative documents
+    positive_docs = []
+    negative_docs = []
+    for doc in raw_documents:
+        has_target = any(obj.get('finding_name') in target_lesions
+                         for obj in doc.get('objects', []))
+        if has_target:
+            positive_docs.append(doc)
+        else:
+            negative_docs.append(doc)
+
+    np.random.seed(args.seed)
+    np.random.shuffle(positive_docs)
+    np.random.shuffle(negative_docs)
+
+    # Determine which documents to use
+    if include_negative:
+        all_docs = positive_docs + negative_docs
+        np.random.shuffle(all_docs)
+        print(f"Including all negative samples: {len(positive_docs)} positive + {len(negative_docs)} negative = {len(all_docs)} total")
+    else:
+        all_docs = positive_docs
+        print(f"Using positive samples only: {len(positive_docs)} samples")
+
+    num_val = args.num_validation_samples or max(1, len(all_docs) // 5)
+    num_val = min(num_val, len(all_docs))
+
+    val_docs, train_docs = all_docs[:num_val], all_docs[num_val:]
+    print(f"Split: {len(val_docs)} validation, {len(train_docs)} training")
+
+    return SpatialSplitDataset(train_docs, args.target_lesion), SpatialSplitDataset(val_docs, args.target_lesion)
