@@ -20,3 +20,7 @@ baselines
 paper
 fewshot_sam_cal
 /analysis
+active_learning/figs/
+active_learning/sam_adaptation.py
+active_learning/sam_visualization_compare.py
+active_learning/sam_visualize.py
