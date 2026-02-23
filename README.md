@@ -49,7 +49,7 @@ python run_al_baselines.py --mode <strategy> [options]
 - `taudis` - TAUDIS
 - `usimc` - USIMC
 - `mcd_alunet` - MC Dropout variant
-- `lunit` - Learning Loss
+- `Learning Loss` - Learning Loss
 
 ## Example Commands
 
