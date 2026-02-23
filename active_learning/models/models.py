@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Model definitions for SAM adaptation project.
+Segmentation and detection models for active learning (U-Net, SAM-based, LUNIT, etc.).
 """
 
 import torch
@@ -178,9 +178,9 @@ class MCDropoutSAMModel(nn.Module):
         super().__init__()
 
         # Load SAM model
-        print(f"🔄 Loading SAM model from {sam_checkpoint_path}...")
+        print(f"Loading SAM model from {sam_checkpoint_path}...")
         self.sam = sam_model_registry[vit_model](checkpoint=sam_checkpoint_path)
-        print("✅ SAM model loaded successfully")
+        print("SAM model loaded.")
 
         # Freeze SAM parameters
         for param in self.sam.parameters():
@@ -216,7 +216,7 @@ class MCDropoutSAMModel(nn.Module):
 
 
 class SegmentationModel(nn.Module):
-    """General segmentation model that can replace SAMLesionModel."""
+    """General segmentation model"""
 
     def __init__(self, model_type: str = 'smp_efficientnet', device: str = 'cuda'):
         super().__init__()
@@ -305,12 +305,10 @@ class SegmentationModel(nn.Module):
 
 class LossPredictionModule(nn.Module):
     """
-    Loss Prediction Module for Learning Loss Active Learning.
+    Loss Prediction Module for Learning Loss active learning.
 
-    This module takes multi-level features from the target model and predicts
-    the loss value without requiring ground truth labels.
-
-    Reference: "Learning Loss for Active Learning" (CVPR 2019)
+    Takes multi-level features from the target model and predicts the loss
+    value without requiring ground truth labels.
     """
 
     def __init__(self, feature_dims, hidden_dim=128):
@@ -463,3 +461,68 @@ class SegmentationModelWithLossPrediction(nn.Module):
                 return mask, features
             else:
                 return mask
+
+
+# =============================================================================
+# Model Factory Functions
+# =============================================================================
+
+def create_model(args, device, checkpoint_path=None):
+    """
+    Create model for Active Learning training or uncertainty calculation.
+
+    Args:
+        args: Arguments containing:
+            - mode: Selection strategy (for LUNIT special handling)
+            - model_type: Model architecture type
+            - task_type: 'segmentation' or 'detection' (optional)
+            - dataset_source: 'mdb' or 'vindr' (optional, used to infer task_type)
+            - vindr_mask_type: 'detection' or other (optional, used to infer task_type)
+        device: PyTorch device
+        checkpoint_path: Optional path to load checkpoint
+
+    Returns:
+        model: Created model on device
+    """
+    import os
+    from .detection_models import create_detection_model
+
+    # Determine task type
+    task_type = getattr(args, 'task_type', None)
+    if task_type is None:
+        # Infer from dataset_source and mask_type
+        if hasattr(args, 'dataset_source') and args.dataset_source == 'vindr':
+            if hasattr(args, 'vindr_mask_type') and args.vindr_mask_type == 'detection':
+                task_type = 'detection'
+            else:
+                task_type = 'segmentation'
+        elif hasattr(args, 'dataset_source') and args.dataset_source == 'chestxdet10':
+            if getattr(args, 'chestxdet10_mask_type', 'detection') == 'detection':
+                task_type = 'detection'
+            else:
+                task_type = 'segmentation'
+        else:
+            task_type = 'segmentation'
+    
+    # Create appropriate model
+    if task_type == 'detection':
+        return create_detection_model(args, device, checkpoint_path)
+    
+    # Segmentation models
+    if args.mode == 'lunit':
+        base_model = SegmentationModel(args.model_type, device).to(device)
+        model = SegmentationModelWithLossPrediction(base_model).to(device)
+    else:
+        model = SegmentationModel(args.model_type, device).to(device)
+
+    # Load checkpoint if provided
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=device)
+            state_dict = checkpoint.get('model_state_dict', checkpoint)
+            model.load_state_dict(state_dict, strict=False)
+            print(f"Loaded checkpoint: {checkpoint_path}")
+        except Exception as e:
+            print(f"Failed to load checkpoint: {e}")
+
+    return model

@@ -1,7 +1,6 @@
-
 from .models import (LesionDecoder, LossPredictionModule, MCDropoutDecoder,
                      MCDropoutSAMModel, SAMLesionModel, SegmentationModel,
-                     SegmentationModelWithLossPrediction)
+                     SegmentationModelWithLossPrediction, create_model)
 
 __all__ = [
     'LesionDecoder',
@@ -10,5 +9,6 @@ __all__ = [
     'MCDropoutSAMModel',
     'SegmentationModel',
     'LossPredictionModule',
-    'SegmentationModelWithLossPrediction'
+    'SegmentationModelWithLossPrediction',
+    'create_model'
 ]
