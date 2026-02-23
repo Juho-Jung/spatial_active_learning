@@ -60,7 +60,7 @@ python run_al_baselines.py --mode random --round_num 10 --num_samples 20
 # Uncertainty-based
 python run_al_baselines.py --mode uncertainty --uncertainty_type none
 
-# LUNIT (Learning Loss)
+# Learning Loss
 python run_al_baselines.py --mode lunit --round_num 50 --num_samples 10 --gpu_id 1
 
 # USIMC
