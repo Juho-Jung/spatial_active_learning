@@ -24,3 +24,7 @@ active_learning/figs/
 active_learning/sam_adaptation.py
 active_learning/sam_visualization_compare.py
 active_learning/sam_visualize.py
+active_learning/sample_selection/sample_selection_alunet.py
+active_learning/sample_selection/sample_selection_coreset.py
+active_learning/sample_selection/sample_selection_lunit.py
+active_learning/sample_selection/sample_selection_TAUDIS.py
