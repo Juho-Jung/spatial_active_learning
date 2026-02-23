@@ -383,10 +383,180 @@ def calculate_uncertainty_none(model, dataloader, device, return_detailed=False,
                 all_entropies.append(pixel_entropy)
 
     if return_detailed:
+        predictions = np.concatenate(all_predictions, axis=0) if all_predictions else np.array([])
         result = {
             'uncertainties': np.array(uncertainties),
-            'predictions': np.concatenate(all_predictions, axis=0) if all_predictions else np.array([]),
-            'entropies': np.concatenate(all_entropies, axis=0) if all_entropies else np.array([])
+            'predictions': predictions,
+            'entropies': np.concatenate(all_entropies, axis=0) if all_entropies else np.array([]),
+            # For 'none' type, use uniform lesionness (all ones) so w(i) = M(i)*H(i) = H(i)
+            'lesionness': np.ones_like(predictions) if len(predictions) > 0 else np.array([])
+        }
+        if return_features and all_features:
+            result['features'] = np.concatenate(all_features, axis=0)
+        return result
+    elif return_features and all_features:
+        return {
+            'uncertainties': np.array(uncertainties),
+            'features': np.concatenate(all_features, axis=0)
+        }
+    else:
+        return np.array(uncertainties)
+
+
+def calculate_uncertainty_detection(model, dataloader, device, return_detailed=False, return_features=False):
+    """
+    Calculate uncertainty for detection models.
+
+    For detection, uncertainty is based on:
+    1. Prediction confidence (scores)
+    2. Number of detections
+    3. Box localization confidence
+
+    Args:
+        model: Detection model
+        dataloader: DataLoader with detection data
+        device: Device to run model on
+        return_detailed: If True, return detailed predictions
+        return_features: If True, return features
+
+    Returns:
+        np.array or dict: Uncertainty scores or detailed results
+    """
+    model.eval()
+    uncertainties = []
+    all_predictions = []
+    all_features = []
+    image_sizes = []  # Initialize image_sizes for return_detailed mode
+
+    with torch.no_grad():
+        for batch in dataloader:
+            if len(batch) == 2:
+                images, targets = batch
+            else:
+                images = batch[0]
+                targets = None
+
+            # Convert to list format for detection models
+            if isinstance(images, torch.Tensor):
+                if images.dim() == 4:
+                    # Store image sizes before converting
+                    if return_detailed:
+                        for img in images:
+                            _, H, W = img.shape
+                            image_sizes.append((H, W))
+                    images = [img for img in images]
+                else:
+                    if return_detailed:
+                        _, H, W = images.shape
+                        image_sizes.append((H, W))
+                    images = [images]
+            else:
+                # If already a list, get sizes from first image
+                if return_detailed and len(images) > 0:
+                    if torch.is_tensor(images[0]):
+                        _, H, W = images[0].shape
+                        image_sizes.extend([(H, W)] * len(images))
+
+            images = [img.to(device) for img in images]
+
+            # Get predictions
+            if return_features:
+                predictions, features = model(images, return_features=True)
+                all_features.append(features.cpu().numpy())
+            else:
+                predictions = model(images)
+
+            # Calculate uncertainty for each image
+            for pred in predictions:
+                boxes = pred['boxes'].cpu().numpy() if torch.is_tensor(pred['boxes']) else pred['boxes']
+                scores = pred['scores'].cpu().numpy() if torch.is_tensor(pred['scores']) else pred['scores']
+
+                if len(scores) == 0:
+                    # No detections: high uncertainty
+                    uncertainty = 1.0
+                else:
+                    # Uncertainty based on:
+                    # 1. Average confidence (lower = more uncertain)
+                    # 2. Number of detections (too many or too few = uncertain)
+                    avg_confidence = np.mean(scores)
+                    num_detections = len(scores)
+
+                    # Normalize detection count uncertainty (optimal around 1-3 detections)
+                    if num_detections == 0:
+                        count_uncertainty = 1.0
+                    elif num_detections <= 3:
+                        count_uncertainty = 0.2  # Low uncertainty for reasonable count
+                    else:
+                        count_uncertainty = min(0.5 + (num_detections - 3) * 0.1, 1.0)
+
+                    # Combined uncertainty
+                    confidence_uncertainty = 1.0 - avg_confidence
+                    uncertainty = 0.6 * confidence_uncertainty + 0.4 * count_uncertainty
+
+                uncertainties.append(uncertainty)
+
+            if return_detailed:
+                all_predictions.append(predictions)
+
+    if return_detailed:
+        # For detection: create probs and lesionness from bbox predictions
+        # This allows SPARCL to work with detection models
+        probs_list = []
+        lesionness_list = []
+
+        # Use stored image sizes or infer from bboxes
+        pred_idx = 0
+        for batch_idx, batch_predictions in enumerate(all_predictions):
+            for pred in batch_predictions:
+                boxes = pred['boxes'].cpu().numpy() if torch.is_tensor(pred['boxes']) else pred['boxes']
+                scores = pred['scores'].cpu().numpy() if torch.is_tensor(pred['scores']) else pred['scores']
+
+                # Get image size from stored sizes or infer from bboxes
+                if pred_idx < len(image_sizes):
+                    H, W = image_sizes[pred_idx]
+                elif len(boxes) > 0:
+                    # Infer from bboxes
+                    max_x = int(np.max(boxes[:, 2])) if len(boxes) > 0 else 512
+                    max_y = int(np.max(boxes[:, 3])) if len(boxes) > 0 else 512
+                    # Round up to nearest reasonable size
+                    H = max(512, ((max_y // 32) + 1) * 32)
+                    W = max(512, ((max_x // 32) + 1) * 32)
+                else:
+                    # Default size
+                    H, W = 512, 512
+
+                pred_idx += 1
+
+                # Create probability maps from bbox predictions
+                # probs: prediction probability map (bbox areas = scores, elsewhere = 0)
+                # lesionness: same as probs for detection (bbox = lesion probability)
+                prob_map = np.zeros((H, W), dtype=np.float32)
+                lesion_map = np.zeros((H, W), dtype=np.float32)
+
+                # Fill bbox areas with scores
+                for box, score in zip(boxes, scores):
+                    x1, y1, x2, y2 = box.astype(int)
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(W, x2), min(H, y2)
+
+                    if x2 > x1 and y2 > y1:
+                        # Use maximum score if boxes overlap
+                        prob_map[y1:y2, x1:x2] = np.maximum(prob_map[y1:y2, x1:x2], score)
+                        lesion_map[y1:y2, x1:x2] = np.maximum(lesion_map[y1:y2, x1:x2], score)
+
+                probs_list.append(prob_map)
+                lesionness_list.append(lesion_map)
+
+        # Flatten all_predictions from nested list to flat list
+        flat_predictions = []
+        for batch_predictions in all_predictions:
+            flat_predictions.extend(batch_predictions)
+
+        result = {
+            'uncertainties': np.array(uncertainties),
+            'predictions': flat_predictions,  # Flattened detection predictions (one dict per image)
+            'probs': np.array(probs_list) if probs_list else np.array([]),  # Bbox-based probability maps
+            'lesionness': np.array(lesionness_list) if lesionness_list else np.array([]),  # Bbox-based lesionness maps
         }
         if return_features and all_features:
             result['features'] = np.concatenate(all_features, axis=0)
@@ -407,6 +577,7 @@ UNCERTAINTY_METHODS = {
     'tta': calculate_uncertainty_tta,
     'fast_lesionness': calculate_uncertainty_fast_lesionness,
     'none': calculate_uncertainty_none,
+    'detection': calculate_uncertainty_detection,
 }
 
 
