@@ -61,7 +61,7 @@ python run_al_baselines.py --mode random --round_num 10 --num_samples 20
 python run_al_baselines.py --mode uncertainty --uncertainty_type none
 
 # Learning Loss
-python run_al_baselines.py --mode lunit --round_num 50 --num_samples 10 --gpu_id 1
+python run_al_baselines.py --mode Learning Loss --round_num 50 --num_samples 10 --gpu_id 1
 
 # USIMC
 python run_al_baselines.py --mode usimc --round_num 50 --num_samples 10 --batch_size 16
@@ -90,6 +90,6 @@ active_learning/
 
 ## More Examples
 ```bash
-python run_al_baselines.py --mode lunit --round_num 50 --num_samples 10 --gpu_id 1
+python run_al_baselines.py --mode Learning Loss --round_num 50 --num_samples 10 --gpu_id 1
 python run_al_baselines.py --mode usimc --round_num 50 --num_samples 10 --batch_size 16
 ```
