@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Utility functions for active learning experiments (segmentation and detection).
+Utility functions for SAM adaptation project.
 """
 
 import logging
@@ -13,10 +13,8 @@ import numpy as np
 import torch
 import torch.distributed as dist
 
-# Project root (parent of active_learning/)
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+# Add project root to path
+sys.path.append('/opt/pxi')
 
 
 def set_seed(seed=42):
@@ -96,9 +94,9 @@ def create_session_dir(target_lesion, timestamp=None):
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    session_dir = _PROJECT_ROOT / "output" / f"sam_{target_lesion}_{timestamp}"
-    session_dir.mkdir(parents=True, exist_ok=True)
-    return str(session_dir)
+    session_dir = f"/team/team_pxi/workspace/juhojung/spatial_active_learning/sam_{target_lesion}_{timestamp}"
+    os.makedirs(session_dir, exist_ok=True)
+    return session_dir
 
 
 def plot_validation_curves(results, output_dir, session_name):
@@ -351,25 +349,22 @@ def _plot_combined_spatial_metrics(results, output_dir, session_name):
 # Active Learning Experiment Utilities
 # =============================================================================
 
-def setup_experiment(args, default_output_dir=None):
+def setup_experiment(args, default_output_dir='/team/team_pxi/workspace/juhojung/spatial_active_learning/al_results_2026'):
     """
     Setup Active Learning experiment environment and logging.
 
     Args:
-        args: Parsed command line arguments.
-        default_output_dir: Default output directory. If None, uses project root / 'al_results'.
+        args: Parsed command line arguments
+        default_output_dir: Default output directory
 
     Returns:
         device, output_dir, logger
     """
     from datetime import datetime
 
-    if default_output_dir is None:
-        default_output_dir = str(_PROJECT_ROOT / "al_results")
-
     set_seed(args.seed)
     device = torch.device(f'cuda:{args.gpu_id}' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+    print(f"🚀 Using device: {device}")
 
     # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -406,7 +401,7 @@ def log_final_results(logger, results, selected_indices, output_dir, args):
     """
     final = results[-1]
     spatial = final['spatial_metrics']
-    
+
     # Determine if this is a detection task
     is_detection = 'val_mAP' in final or 'val_AP50' in final
 
@@ -414,14 +409,14 @@ def log_final_results(logger, results, selected_indices, output_dir, args):
     logger.info("Active Learning Completed!")
     logger.info("=" * 80)
     logger.info(f"Final Val Loss: {final['val_loss']:.4f}")
-    
+
     if is_detection:
         logger.info(f"Final Val mAP: {final.get('val_mAP', 0):.4f}")
         logger.info(f"Final Val AP50: {final.get('val_AP50', 0):.4f}")
         logger.info(f"Final Val FROC: {final.get('val_froc_score', 0):.4f}")
     else:
         logger.info(f"Final Val Dice: {final.get('val_dice', 0):.4f}")
-    
+
     logger.info(f"Final Val IoU: {final.get('val_iou', 0):.4f}")
     logger.info(f"Worst Bin Dice: {spatial['worst_bin_dice']:.4f}")
     logger.info(f"Performance Coverage: {spatial['performance_coverage']:.4f}")
@@ -429,9 +424,10 @@ def log_final_results(logger, results, selected_indices, output_dir, args):
     logger.info(f"Total samples: {len(selected_indices)}")
 
     # Print summary to console
-    print(f"\nFinal summary ({args.mode}):")
+    print(f"\n📊 Final Summary ({args.mode}):")
     if is_detection:
-        print(f"   mAP: {final.get('val_mAP', 0):.4f}, AP50: {final.get('val_AP50', 0):.4f}, FROC: {final.get('val_froc_score', 0):.4f}")
+        print(
+            f"   mAP: {final.get('val_mAP', 0):.4f}, AP50: {final.get('val_AP50', 0):.4f}, FROC: {final.get('val_froc_score', 0):.4f}")
     else:
         print(f"   Val Dice: {final.get('val_dice', 0):.4f}, IoU: {final.get('val_iou', 0):.4f}")
     print(f"   Worst Bin: {spatial['worst_bin_dice']:.4f}, Perf Coverage: {spatial['performance_coverage']:.4f}")

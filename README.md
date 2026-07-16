@@ -35,9 +35,9 @@ python run_al_baselines.py --mode <strategy> [options]
 - `uncertainty_area` - Spatial region + Uncertainty
 
 ### Diversity
-- `diversity` - Diversity-based
+- `diversity` - Greedy farthest-point in feature space (diversity among samples selected in the current round)
 - `diversity_uncertainty` - Diversity + Uncertainty
-- `coreset` - Core-set sampling
+- `coreset` - Core-set (k-center) sampling: selects unlabeled samples farthest from the **already labeled set** (Sener & Savarese, ICLR 2018)
 
 ### Adaptive
 - `adaptive` - Adaptive sampling

@@ -33,7 +33,10 @@ ADAPTIVE_STRATEGIES = {
     'adaptive', 'adaptive_improved', 'adaptive_multi_scale',
     'adaptive_performance_monitoring', 'adaptive_ultra', 'adaptive_improved_ultra',
     'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra',
-    'sparcl', 'sparcl_prefiltering', 'sparcl_det'  # Paper-exact implementation (sparcl_det for detection)
+    'sparcl', 'sparcl_prefiltering', 'sparcl_det',  # Paper-exact implementation (sparcl_det for detection)
+    # SPARCL ablation variants for MICCAI 2026 rebuttal
+    'sparcl_no_gating', 'sparcl_fixed_lambda', 'sparcl_no_coverage',
+    'sparcl_det_no_gating', 'sparcl_det_fixed_lambda'
 }
 DIVERSITY_STRATEGIES = {'diversity', 'diversity_uncertainty', 'coreset'}
 SPECIAL_STRATEGIES = {'taudis', 'usimc', 'lunit'}
@@ -74,16 +77,18 @@ def parse_arguments():
     parser.add_argument('--collection', default='both',
                         choices=['validation_collection', 'train_collection', 'sdc_ppm_train-0908', 'both'],
                         help='MongoDB collection name (only used when dataset_source=mdb)')
-    parser.add_argument('--vindr_root', default='data/vinbig',
+    parser.add_argument('--vindr_root', default='/team/team_pxi/pxi-dataset/cxr/public/vinbig',
                         help='Root directory for VinDr-CXR dataset (only used when dataset_source=vindr)')
-    parser.add_argument('--siim_root', default='data/siim',
+    parser.add_argument('--siim_root',
+                        default='/team/team_pxi/pxi-dataset/cxr/public/siim-full/input/input/train',
                         help='Root directory for SIIM dataset (only used when dataset_source=siim)')
     parser.add_argument('--siim_positive_only', action='store_true',
                         help='Only use positive samples (with pneumothorax) in SIIM dataset')
     parser.add_argument('--include_negative', action='store_true',
                         help='Include ALL negative samples (images without target lesion) in the dataset. '
                              'By default, only positive samples are used. Applies to mdb, vindr, chestxdet10.')
-    parser.add_argument('--chestxdet10_root', default='data/ChestX-Det10-Dataset',
+    parser.add_argument('--chestxdet10_root',
+                        default='/team/team_pxi/pxi-dataset/cxr/public/ChestX-Det10-Dataset',
                         help='Root directory for ChestX-Det10 dataset (only used when dataset_source=chestxdet10)')
     parser.add_argument('--chestxdet10_mask_type', default='detection',
                         choices=['detection', 'rectangular', 'ellipse', 'gaussian'],
@@ -113,9 +118,11 @@ def parse_arguments():
     parser.add_argument('--num_validation_samples', type=int, default=100)
     parser.add_argument('--gpu_id', type=int, default=0)
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--output_dir', default=None,
-                        help='Output directory for results (default: al_results under project root)')
+    parser.add_argument('--output_dir',
+                        default='/team/team_pxi/workspace/juhojung/spatial_active_learning/al_results_2026')
     parser.add_argument('--mc_dropout_T', type=int, default=8)
+    parser.add_argument('--lambda1', type=float, default=1.0,
+                        help='lambda_max for SPARCL spatial coverage term')
 
     return parser.parse_args()
 
@@ -149,7 +156,7 @@ def calculate_uncertainties(args, model, full_dataset, pool_indices, selected_in
         uncertainty_type = args.uncertainty_type
 
     uncertainty_func = get_uncertainty_method(uncertainty_type)
-    need_detailed = args.mode in ADAPTIVE_STRATEGIES or args.mode == 'taudis' or args.mode == 'sparcl_det'
+    need_detailed = args.mode in ADAPTIVE_STRATEGIES or args.mode == 'taudis' or args.mode in {'sparcl_det', 'sparcl_det_no_gating', 'sparcl_det_fixed_lambda'}
     need_features = args.mode in DIVERSITY_STRATEGIES or args.mode == 'taudis'
 
     kwargs = {'return_detailed': need_detailed, 'return_features': need_features}
@@ -165,9 +172,12 @@ def prepare_selection_args(args, model, full_dataset, pool_indices, selected_ind
     if isinstance(uncertainty_data, dict):
         uncertainties = uncertainty_data.get('uncertainties')
         args.features = uncertainty_data.get('features')
-        # For segmentation: probs and lesionness are probability maps
-        # For detection: probs and lesionness are bbox-based probability maps (from calculate_uncertainty_detection)
+        # For detection: 'probs' is a bbox-based probability map (from calculate_uncertainty_detection).
+        # For segmentation: uncertainty functions return 'predictions' (pixel-wise probability maps),
+        # which is what SPARCL expects as probs. Fall back to 'predictions' if 'probs' is absent.
         args.probs = uncertainty_data.get('probs')
+        if args.probs is None:
+            args.probs = uncertainty_data.get('predictions')
         args.lesionness = uncertainty_data.get('lesionness')
         # For detection SPARCL, use predictions directly (bboxes)
         args.predictions = uncertainty_data.get('predictions')  # Detection predictions (bboxes)
@@ -180,7 +190,7 @@ def prepare_selection_args(args, model, full_dataset, pool_indices, selected_ind
     args.areas = None
     if args.mode in ADAPTIVE_STRATEGIES and pool_indices:
         sample = full_dataset[pool_indices[0]]
-        if args.mode == 'sparcl_det':
+        if args.mode in {'sparcl_det', 'sparcl_det_no_gating', 'sparcl_det_fixed_lambda'}:
             # For detection, get image size from dataset or use default
             h, w = 512, 512  # Default for detection
             if hasattr(full_dataset, 'target_size'):
@@ -242,7 +252,10 @@ def select_samples(args, pool_indices, uncertainties, selected_indices, areas, r
     if args.mode in {'sparcl', 'sparcl_prefiltering'}:
         return func(pool_indices, uncertainties, args.num_samples, selected_indices,
                     args.probs, args.lesionness, args.bin_id, args.lambda1, seed)
-    if args.mode == 'sparcl_det':
+    if args.mode in {'sparcl_no_gating', 'sparcl_fixed_lambda', 'sparcl_no_coverage'}:
+        return func(pool_indices, uncertainties, args.num_samples, selected_indices,
+                    args.probs, args.lesionness, args.bin_id, args.lambda1, seed)
+    if args.mode in {'sparcl_det', 'sparcl_det_no_gating', 'sparcl_det_fixed_lambda'}:
         # Detection-specific SPARCL: uses predictions (bboxes) instead of probs/lesionness
         return func(pool_indices, uncertainties, args.num_samples, selected_indices,
                     args.predictions, args.bin_id, args.areas, args.lambda1, seed)
@@ -289,7 +302,7 @@ def run_full_training(args, device, output_dir, logger):
     generator = torch.Generator().manual_seed(args.seed)
     train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size], generator=generator)
 
-    print(f"Full training mode: Total={total_size}, Train={train_size}, Val={val_size}")
+    print(f"📊 Full Training Mode: Total={total_size}, Train={train_size}, Val={val_size}")
     logger.info(f"Full Training Mode: Total={total_size}, Train={train_size}, Val={val_size}")
 
     # Create model
@@ -305,7 +318,7 @@ def run_full_training(args, device, output_dir, logger):
 
     areas = divide_image_into_areas(grid_width=args.grid_width, grid_height=args.grid_height)
 
-    print("Training on full dataset...")
+    print("🏋️ Training on full dataset...")
     val_loss, val_dice, val_iou, val_bin_metrics, current_bin_dices, checkpoint = train_model_round(
         model, train_dataset, val_dataset, device,
         args.train_epochs, args.batch_size, 1, output_dir,
@@ -346,18 +359,18 @@ def run_full_training(args, device, output_dir, logger):
 
     save_results(results, output_dir)
 
-    print("Full training completed.")
+    print(f"\n🎉 Full Training Completed!")
     if task_type == 'detection':
         mAP = val_bin_metrics.get('mAP', 0)
         AP50 = val_bin_metrics.get('AP50', 0)
         AP75 = val_bin_metrics.get('AP75', 0)
         froc = val_bin_metrics.get('froc_score', 0)
-        print(f"Final: mAP={mAP:.4f}, AP50={AP50:.4f}, AP75={AP75:.4f}")
-        print(f"  FROC={froc:.4f}, Precision={val_dice:.4f}, IoU={val_iou:.4f}")
+        print(f"✅ Final: mAP={mAP:.4f}, AP50={AP50:.4f}, AP75={AP75:.4f}")
+        print(f"   FROC={froc:.4f}, Precision={val_dice:.4f}, IoU={val_iou:.4f}")
         logger.info(
             f"Full Training: Loss={val_loss:.4f}, mAP={mAP:.4f}, AP50={AP50:.4f}, AP75={AP75:.4f}, FROC={froc:.4f}")
     else:
-        print(f"Final: Dice={val_dice:.4f}, IoU={val_iou:.4f}, Worst={val_bin_metrics['worst_bin_dice']:.4f}")
+        print(f"✅ Final: Dice={val_dice:.4f}, IoU={val_iou:.4f}, Worst={val_bin_metrics['worst_bin_dice']:.4f}")
         logger.info(f"Full Training: Loss={val_loss:.4f}, Dice={val_dice:.4f}, IoU={val_iou:.4f}")
 
     return results
@@ -370,7 +383,7 @@ def main():
     # SIIM dataset: automatically set target_lesion to pneumothorax
     if args.dataset_source == 'siim':
         if args.target_lesion != ['pneumothorax']:
-            print(f"SIIM dataset only has pneumothorax; ignoring target_lesion={args.target_lesion}")
+            print(f"ℹ️  SIIM dataset only has pneumothorax. Ignoring target_lesion={args.target_lesion}")
         args.target_lesion = ['pneumothorax']
 
     # Full training mode (no Active Learning)
@@ -384,7 +397,7 @@ def main():
 
     # Create datasets
     full_dataset, val_dataset = create_al_datasets(args)
-    print(f"Pool: {len(full_dataset)}, Validation: {len(val_dataset)}")
+    print(f"📊 Pool: {len(full_dataset)}, Validation: {len(val_dataset)}")
 
     # Initialize
     pool_indices = list(range(len(full_dataset)))
@@ -394,10 +407,10 @@ def main():
     prev_bin_dices = None
     prev_checkpoint = None
 
-    print(f"Starting {args.mode} strategy...")
+    print(f"🎯 Starting {args.mode} strategy...")
 
     for round_idx in range(args.round_num):
-        print(f"\nRound {round_idx + 1}/{args.round_num}")
+        print(f"\n🔄 Round {round_idx + 1}/{args.round_num}")
         logger.info(f"Round {round_idx + 1}/{args.round_num}")
 
         # Calculate uncertainties
@@ -411,7 +424,7 @@ def main():
             uncertainty_data if uncertainty_data is not None else {}, device)
         new_indices = select_samples(args, pool_indices, uncertainties, selected_indices, areas, round_idx)
         selected_indices.extend(new_indices)
-        print(f"Selected {len(new_indices)} samples (total: {len(selected_indices)})")
+        print(f"📊 Selected {len(new_indices)} samples (total: {len(selected_indices)})")
 
         # Train
         train_dataset = torch.utils.data.Subset(full_dataset, selected_indices)
@@ -425,7 +438,7 @@ def main():
              getattr(args, 'chestxdet10_mask_type', 'detection') == 'detection')
         ) else 'segmentation'
 
-        print("Training...")
+        print("🏋️ Training...")
         val_loss, val_dice, val_iou, val_bin_metrics, current_bin_dices, checkpoint = train_model_round(
             model, train_dataset, val_dataset, device,
             args.train_epochs, args.batch_size, round_idx + 1, output_dir,
@@ -465,14 +478,14 @@ def main():
             mAP = val_bin_metrics.get('mAP', 0)
             AP50 = val_bin_metrics.get('AP50', 0)
             froc = val_bin_metrics.get('froc_score', 0)
-            print(f"Round {round_idx + 1}: mAP={mAP:.4f}, AP50={AP50:.4f}, FROC={froc:.4f}, Prec={val_dice:.4f}")
+            print(f"✅ Round {round_idx + 1}: mAP={mAP:.4f}, AP50={AP50:.4f}, FROC={froc:.4f}, Prec={val_dice:.4f}")
             logger.info(
                 f"Round {round_idx + 1} completed - Val Loss: {val_loss:.4f}, mAP: {mAP:.4f}, AP50: {AP50:.4f}, FROC: {froc:.4f}")
         else:
             worst_bin = val_bin_metrics.get('worst_bin_dice', 0)
             perf_cov = val_bin_metrics.get('performance_coverage', 0)
             spatial_cons = val_bin_metrics.get('spatial_consistency', 0)
-            print(f"Round {round_idx + 1}: Dice={val_dice:.4f}, IoU={val_iou:.4f}, Worst={worst_bin:.4f}")
+            print(f"✅ Round {round_idx + 1}: Dice={val_dice:.4f}, IoU={val_iou:.4f}, Worst={worst_bin:.4f}")
             logger.info(
                 f"Round {round_idx + 1} completed - Val Loss: {val_loss:.4f}, Val Dice: {val_dice:.4f}, Val IoU: {val_iou:.4f}")
             logger.info(
@@ -483,7 +496,7 @@ def main():
         save_results(results, output_dir)
 
     # Final
-    print("Completed.")
+    print(f"\n🎉 Completed!")
     # Handle multiple target lesions in session name
     if isinstance(args.target_lesion, list):
         lesion_str = '_'.join(sorted(args.target_lesion))

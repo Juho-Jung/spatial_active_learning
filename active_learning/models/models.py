@@ -5,8 +5,15 @@ Segmentation and detection models for active learning (U-Net, SAM-based, LUNIT, 
 
 import torch
 import torch.nn as nn
-from segment_anything import sam_model_registry
-from segment_anything.utils.transforms import ResizeLongestSide
+
+try:
+    from segment_anything import sam_model_registry
+    from segment_anything.utils.transforms import ResizeLongestSide
+    _SAM_AVAILABLE = True
+except ImportError:
+    sam_model_registry = None
+    ResizeLongestSide = None
+    _SAM_AVAILABLE = False
 
 
 class LesionDecoder(nn.Module):

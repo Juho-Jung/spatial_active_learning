@@ -138,6 +138,10 @@ def select_samples_area_random(pool_indices, num_samples, selected_indices, area
         area_idx = idx % len(areas)
         area_groups[area_idx].append(idx)
 
+    # Shuffle each area group for randomness
+    for area_idx in area_groups:
+        rng.shuffle(area_groups[area_idx])
+
     # Round-robin selection from each area
     selected = []
     area_idx = 0
@@ -1158,6 +1162,713 @@ def calculate_performance_coverage_bonus(H_k, h_histogram, min_samples_per_bin, 
     return bonus
 
 
+# =============================================================================
+# SPARCL: Spatial Active Learning with Entropy-Gated Adaptive Weighting
+# =============================================================================
+
+def select_samples_sparcl(pool_indices, uncertainties, num_samples, selected_indices,
+                          probs=None, lesionness=None, bin_id=None, lambda_max=1.0, seed=None):
+    """
+    SPARCL: Spatial Active Learning with Entropy-Gated Adaptive Weighting.
+
+    This implementation matches the paper description exactly:
+
+    1. Per-image spatial histogram:
+       h_k(x) = Σ_{i∈Ω_k} w(i), where w(i) = M(i) * H_pred(i)
+
+    2. Entropy-gated adaptive weighting:
+       Q_k = Σ_{x∈U_t} h_k(x)  (pool-wide mass per bin)
+       q_k = Q_k / Σ_j Q_j     (normalized distribution)
+       H_pool = -Σ_k q_k * log(q_k)  (pool entropy)
+       λ^(t) = λ_max * H_pool / log(K)
+
+    3. Diminishing return function: ψ(z) = √z
+
+    4. Acquisition objective:
+       Δ(x|S) = U(x) + λ^(t) * Σ_k [ψ(H_k(S) + h_k(x)) - ψ(H_k(S))]
+
+    Args:
+        pool_indices: List of available sample indices
+        uncertainties: List of uncertainty values for each sample (U(x))
+        num_samples: Number of samples to select
+        selected_indices: List of already selected indices
+        probs: Tensor [N, H, W] - pixel prediction probabilities p(i)
+        lesionness: Tensor [N, H, W] - lesionness values M(i)
+        bin_id: Tensor [H, W] - spatial bin assignments (0..K-1)
+        lambda_max: Maximum weight for spatial coverage term (λ_max)
+        seed: Random seed for reproducibility
+
+    Returns:
+        List of selected sample indices
+    """
+    available_indices = [idx for idx in pool_indices if idx not in selected_indices]
+    if len(available_indices) < num_samples:
+        return available_indices
+
+    # For first round (no uncertainties), use random selection
+    if uncertainties is None or len(uncertainties) == 0:
+        return select_samples_random(pool_indices, num_samples, selected_indices, seed)
+
+    # If required tensors are not provided, fall back to uncertainty selection
+    if probs is None or lesionness is None or bin_id is None:
+        print(f"⚠️ SPARCL selection: Missing required data (probs={probs is not None}, "
+              f"lesionness={lesionness is not None}, bin_id={bin_id is not None}). "
+              f"Falling back to uncertainty selection.")
+        return select_samples_uncertainty(pool_indices, uncertainties, num_samples, selected_indices, seed)
+
+    # Convert to numpy if needed
+    # Convert to numpy arrays if needed
+    if torch.is_tensor(probs):
+        probs = probs.cpu().numpy()
+    elif isinstance(probs, list):
+        probs = np.array(probs)
+    if torch.is_tensor(lesionness):
+        lesionness = lesionness.cpu().numpy()
+    elif isinstance(lesionness, list):
+        lesionness = np.array(lesionness)
+    if torch.is_tensor(bin_id):
+        bin_id = bin_id.cpu().numpy()
+    elif isinstance(bin_id, list):
+        bin_id = np.array(bin_id)
+
+    # Ensure probs and lesionness are numpy arrays with correct shape
+    if probs is None or len(probs) == 0:
+        raise ValueError("probs is required for SPARCL but is None or empty")
+    if lesionness is None or len(lesionness) == 0:
+        raise ValueError("lesionness is required for SPARCL but is None or empty")
+
+    # Ensure probs and lesionness are 3D arrays [N, H, W]
+    if probs.ndim == 2:
+        probs = probs[np.newaxis, :, :]  # Add batch dimension
+    if lesionness.ndim == 2:
+        lesionness = lesionness[np.newaxis, :, :]  # Add batch dimension
+
+    # ==========================================================================
+    # Optimized index mapping for O(1) lookup
+    # ==========================================================================
+    N = len(available_indices)
+    pool_idx_to_pos = {idx: pos for pos, idx in enumerate(pool_indices)}
+    available_positions = np.array([pool_idx_to_pos[idx] for idx in available_indices])
+
+    available_probs = probs[available_positions]  # [N, H, W]
+    available_lesionness = lesionness[available_positions]  # [N, H, W]
+
+    # Pre-compute uncertainty scores for O(1) lookup
+    available_uncertainties = np.array([uncertainties[pool_idx_to_pos[idx]] for idx in available_indices])
+
+    # ==========================================================================
+    # Step 1: Calculate pixel entropy H_pred(i) = -(p*log(p) + (1-p)*log(1-p))
+    # ==========================================================================
+    eps = 1e-8
+    p_safe = np.clip(available_probs, eps, 1 - eps)
+    pixel_entropy = -(p_safe * np.log(p_safe) + (1 - p_safe) * np.log(1 - p_safe))
+
+    # ==========================================================================
+    # Step 2: Calculate weights w(i) = M(i) * H_pred(i)
+    # ==========================================================================
+    if np.allclose(available_lesionness, 1.0):
+        weights = pixel_entropy
+    else:
+        weights = available_lesionness * pixel_entropy
+
+    # ==========================================================================
+    # Step 3: Vectorized spatial histogram using bincount
+    # ==========================================================================
+    K = int(np.max(bin_id)) + 1  # Number of bins
+    bin_id_flat = bin_id.flatten()
+    weights_flat = weights.reshape(N, -1)  # [N, H*W]
+
+    h_histograms = np.zeros((N, K), dtype=np.float32)
+    for i in range(N):
+        h_histograms[i] = np.bincount(bin_id_flat, weights=weights_flat[i], minlength=K)
+
+    # ==========================================================================
+    # Step 4: Entropy-gated adaptive weighting
+    # Q_k = Σ_{x∈U_t} h_k(x)  (pool-wide mass per bin)
+    # q_k = Q_k / Σ_j Q_j     (normalized distribution)
+    # H_pool = -Σ_k q_k * log(q_k)
+    # λ^(t) = λ_max * H_pool / log(K)
+    # ==========================================================================
+    Q_k = np.sum(h_histograms, axis=0)  # [K] - pool-wide mass per bin
+    Q_total = np.sum(Q_k) + eps
+    q_k = Q_k / Q_total  # Normalized distribution
+
+    # Pool entropy: H_pool = -Σ_k q_k * log(q_k)
+    q_k_safe = np.clip(q_k, eps, 1.0)
+    H_pool = -np.sum(q_k * np.log(q_k_safe))
+
+    # Adaptive lambda: λ^(t) = λ_max * H_pool / log(K)
+    log_K = np.log(K) if K > 1 else 1.0
+    adaptive_lambda = lambda_max * (H_pool / log_K)
+
+    # ==========================================================================
+    # Step 5: Vectorized greedy selection
+    # ψ(z) = √z
+    # Δ(x|S) = U(x) + λ^(t) * Σ_k [ψ(H_k(S) + h_k(x)) - ψ(H_k(S))]
+    # ==========================================================================
+    selected = []
+    selected_mask = np.zeros(N, dtype=bool)
+    H_k = np.zeros(K, dtype=np.float32)  # Cumulative coverage
+    sqrt_H_k = np.zeros(K, dtype=np.float32)
+
+    for _ in range(min(num_samples, N)):
+        # Vectorized: compute delta_spatial for all candidates at once
+        new_H_k = H_k + h_histograms  # [N, K]
+        sqrt_new_H_k = np.sqrt(np.maximum(new_H_k, 0))
+        delta_spatial = np.sum(sqrt_new_H_k - sqrt_H_k, axis=1)  # [N]
+
+        # Compute scores: U(x) + λ * Δ_spatial(x|S)
+        scores = available_uncertainties + adaptive_lambda * delta_spatial
+
+        # Mask out already selected
+        scores[selected_mask] = -np.inf
+
+        # Find best candidate
+        best_local_idx = np.argmax(scores)
+        if scores[best_local_idx] == -np.inf:
+            break
+
+        # Add to selected
+        selected.append(available_indices[best_local_idx])
+        selected_mask[best_local_idx] = True
+
+        # Update cumulative coverage
+        H_k += h_histograms[best_local_idx]
+        sqrt_H_k = np.sqrt(np.maximum(H_k, 0))
+
+    return selected
+
+
+def _select_samples_sparcl_with_lambda(pool_indices, uncertainties, num_samples, selected_indices,
+                                       probs, lesionness, bin_id, fixed_lambda, seed=None):
+    """
+    SPARCL ablation: identical to select_samples_sparcl but with a fixed lambda
+    instead of the entropy-gated adaptive lambda. Used for component-level ablation
+    in the rebuttal (w/o entropy gating; fixed lambda variants).
+    """
+    available_indices = [idx for idx in pool_indices if idx not in selected_indices]
+    if len(available_indices) < num_samples:
+        return available_indices
+    if uncertainties is None or len(uncertainties) == 0:
+        return select_samples_random(pool_indices, num_samples, selected_indices, seed)
+    if probs is None or lesionness is None or bin_id is None:
+        return select_samples_uncertainty(pool_indices, uncertainties, num_samples, selected_indices, seed)
+
+    if torch.is_tensor(probs):
+        probs = probs.cpu().numpy()
+    elif isinstance(probs, list):
+        probs = np.array(probs)
+    if torch.is_tensor(lesionness):
+        lesionness = lesionness.cpu().numpy()
+    elif isinstance(lesionness, list):
+        lesionness = np.array(lesionness)
+    if torch.is_tensor(bin_id):
+        bin_id = bin_id.cpu().numpy()
+    elif isinstance(bin_id, list):
+        bin_id = np.array(bin_id)
+
+    if probs.ndim == 2:
+        probs = probs[np.newaxis, :, :]
+    if lesionness.ndim == 2:
+        lesionness = lesionness[np.newaxis, :, :]
+
+    N = len(available_indices)
+    pool_idx_to_pos = {idx: pos for pos, idx in enumerate(pool_indices)}
+    available_positions = np.array([pool_idx_to_pos[idx] for idx in available_indices])
+
+    available_probs = probs[available_positions]
+    available_lesionness = lesionness[available_positions]
+    available_uncertainties = np.array([uncertainties[pool_idx_to_pos[idx]] for idx in available_indices])
+
+    eps = 1e-8
+    p_safe = np.clip(available_probs, eps, 1 - eps)
+    pixel_entropy = -(p_safe * np.log(p_safe) + (1 - p_safe) * np.log(1 - p_safe))
+    if np.allclose(available_lesionness, 1.0):
+        weights = pixel_entropy
+    else:
+        weights = available_lesionness * pixel_entropy
+
+    K = int(np.max(bin_id)) + 1
+    bin_id_flat = bin_id.flatten()
+    weights_flat = weights.reshape(N, -1)
+
+    h_histograms = np.zeros((N, K), dtype=np.float32)
+    for i in range(N):
+        h_histograms[i] = np.bincount(bin_id_flat, weights=weights_flat[i], minlength=K)
+
+    selected = []
+    selected_mask = np.zeros(N, dtype=bool)
+    H_k = np.zeros(K, dtype=np.float32)
+    sqrt_H_k = np.zeros(K, dtype=np.float32)
+
+    for _ in range(min(num_samples, N)):
+        new_H_k = H_k + h_histograms
+        sqrt_new_H_k = np.sqrt(np.maximum(new_H_k, 0))
+        delta_spatial = np.sum(sqrt_new_H_k - sqrt_H_k, axis=1)
+
+        scores = available_uncertainties + fixed_lambda * delta_spatial
+        scores[selected_mask] = -np.inf
+
+        best_local_idx = np.argmax(scores)
+        if scores[best_local_idx] == -np.inf:
+            break
+
+        selected.append(available_indices[best_local_idx])
+        selected_mask[best_local_idx] = True
+        H_k += h_histograms[best_local_idx]
+        sqrt_H_k = np.sqrt(np.maximum(H_k, 0))
+
+    return selected
+
+
+def select_samples_sparcl_no_gating(pool_indices, uncertainties, num_samples, selected_indices,
+                                    probs=None, lesionness=None, bin_id=None, lambda_max=1.0, seed=None):
+    """SPARCL ablation: no entropy gating. Uses lambda^(t) = lambda_max constantly."""
+    return _select_samples_sparcl_with_lambda(
+        pool_indices, uncertainties, num_samples, selected_indices,
+        probs, lesionness, bin_id, fixed_lambda=lambda_max, seed=seed)
+
+
+def select_samples_sparcl_fixed_lambda(pool_indices, uncertainties, num_samples, selected_indices,
+                                       probs=None, lesionness=None, bin_id=None, lambda_max=0.5, seed=None):
+    """SPARCL ablation: fixed lambda=0.5 (or lambda_max). No adaptive entropy gating."""
+    return _select_samples_sparcl_with_lambda(
+        pool_indices, uncertainties, num_samples, selected_indices,
+        probs, lesionness, bin_id, fixed_lambda=lambda_max, seed=seed)
+
+
+def select_samples_sparcl_no_coverage(pool_indices, uncertainties, num_samples, selected_indices,
+                                      probs=None, lesionness=None, bin_id=None, lambda_max=1.0, seed=None):
+    """SPARCL ablation: no spatial coverage term. Equivalent to pure uncertainty selection."""
+    return select_samples_uncertainty(pool_indices, uncertainties, num_samples, selected_indices, seed)
+
+
+def select_samples_sparcl_prefiltering(pool_indices, uncertainties, num_samples, selected_indices,
+                                       probs=None, lesionness=None, bin_id=None, lambda_max=1.0, seed=None,
+                                       prefilter_ratio=5):
+    """
+    SPARCL with Prefiltering: Optimized version for faster execution.
+
+    Two-stage procedure (from paper):
+    1. Prefilter top-r candidates by U(x) where r = prefilter_ratio * num_samples
+    2. Apply lazy greedy on the reduced set
+
+    This version is much faster than the basic SPARCL by:
+    - Processing only top-r candidates instead of all available samples
+    - Using bincount for fast histogram calculation
+    - Vectorized operations for greedy selection
+
+    Args:
+        pool_indices: List of available sample indices
+        uncertainties: List of uncertainty values for each sample (U(x))
+        num_samples: Number of samples to select
+        selected_indices: List of already selected indices
+        probs: Tensor [N, H, W] - pixel prediction probabilities p(i)
+        lesionness: Tensor [N, H, W] - lesionness values M(i)
+        bin_id: Tensor [H, W] - spatial bin assignments (0..K-1)
+        lambda_max: Maximum weight for spatial coverage term (λ_max)
+        seed: Random seed for reproducibility
+        prefilter_ratio: Ratio for prefiltering (r = prefilter_ratio * num_samples)
+
+    Returns:
+        List of selected sample indices
+    """
+    # Use set for O(1) lookup
+    selected_set = set(selected_indices)
+    available_indices = [idx for idx in pool_indices if idx not in selected_set]
+    if len(available_indices) < num_samples:
+        return available_indices
+
+    # For first round (no uncertainties), use random selection
+    if uncertainties is None or len(uncertainties) == 0:
+        return select_samples_random(pool_indices, num_samples, selected_indices, seed)
+
+    # If required tensors are not provided, fall back to uncertainty selection
+    if probs is None or lesionness is None or bin_id is None:
+        print(f"⚠️ SPARCL-Prefiltering selection: Missing required data (probs={probs is not None}, "
+              f"lesionness={lesionness is not None}, bin_id={bin_id is not None}). "
+              f"Falling back to uncertainty selection.")
+        return select_samples_uncertainty(pool_indices, uncertainties, num_samples, selected_indices, seed)
+
+    # Convert to numpy if needed
+    if torch.is_tensor(probs):
+        probs = probs.cpu().numpy()
+    if torch.is_tensor(lesionness):
+        lesionness = lesionness.cpu().numpy()
+    if torch.is_tensor(bin_id):
+        bin_id = bin_id.cpu().numpy()
+
+    # ==========================================================================
+    # Stage 1: Prefilter top-r candidates by uncertainty
+    # ==========================================================================
+    pool_idx_to_pos = {idx: pos for pos, idx in enumerate(pool_indices)}
+
+    # Get uncertainty scores for all available indices
+    all_uncertainties = np.array([uncertainties[pool_idx_to_pos[idx]] for idx in available_indices])
+
+    # Prefilter: select top-r by uncertainty
+    r = min(prefilter_ratio * num_samples, len(available_indices))
+    top_r_local_indices = np.argsort(all_uncertainties)[-r:][::-1]  # Descending order
+
+    # Create filtered subset
+    filtered_indices = [available_indices[i] for i in top_r_local_indices]
+    filtered_positions = np.array([pool_idx_to_pos[idx] for idx in filtered_indices])
+
+    N = len(filtered_indices)
+    filtered_probs = probs[filtered_positions]  # [N, H, W]
+    filtered_lesionness = lesionness[filtered_positions]  # [N, H, W]
+    filtered_uncertainties = all_uncertainties[top_r_local_indices]
+
+    # ==========================================================================
+    # Step 1: Calculate pixel entropy H_pred(i) = -(p*log(p) + (1-p)*log(1-p))
+    # ==========================================================================
+    eps = 1e-8
+    p_safe = np.clip(filtered_probs, eps, 1 - eps)
+    pixel_entropy = -(p_safe * np.log(p_safe) + (1 - p_safe) * np.log(1 - p_safe))
+
+    # ==========================================================================
+    # Step 2: Calculate weights w(i) = M(i) * H_pred(i)
+    # ==========================================================================
+    if np.allclose(filtered_lesionness, 1.0):
+        weights = pixel_entropy
+    else:
+        weights = filtered_lesionness * pixel_entropy
+
+    # ==========================================================================
+    # Step 3: Vectorized spatial histogram calculation using bincount
+    # ==========================================================================
+    K = int(np.max(bin_id)) + 1  # Number of bins
+
+    # Flatten for efficient bincount-based histogram
+    bin_id_flat = bin_id.flatten()
+    weights_flat = weights.reshape(N, -1)  # [N, H*W]
+
+    # Use bincount for fast histogram (much faster than masked sum)
+    h_histograms = np.zeros((N, K), dtype=np.float32)
+    for i in range(N):
+        h_histograms[i] = np.bincount(bin_id_flat, weights=weights_flat[i], minlength=K)
+
+    # ==========================================================================
+    # Step 4: Entropy-gated adaptive weighting
+    # ==========================================================================
+    Q_k = np.sum(h_histograms, axis=0)  # [K] - pool-wide mass per bin
+    Q_total = np.sum(Q_k) + eps
+    q_k = Q_k / Q_total  # Normalized distribution
+
+    # Pool entropy: H_pool = -Σ_k q_k * log(q_k)
+    q_k_safe = np.clip(q_k, eps, 1.0)
+    H_pool = -np.sum(q_k * np.log(q_k_safe))
+
+    # Adaptive lambda: λ^(t) = λ_max * H_pool / log(K)
+    log_K = np.log(K) if K > 1 else 1.0
+    adaptive_lambda = lambda_max * (H_pool / log_K)
+
+    # ==========================================================================
+    # Stage 2: Vectorized lazy greedy selection on reduced set
+    # ==========================================================================
+    selected = []
+    selected_mask = np.zeros(N, dtype=bool)
+    H_k = np.zeros(K, dtype=np.float32)  # Cumulative coverage
+    sqrt_H_k = np.zeros(K, dtype=np.float32)
+
+    for _ in range(min(num_samples, N)):
+        # Vectorized delta_spatial computation
+        new_H_k = H_k + h_histograms  # [N, K]
+        sqrt_new_H_k = np.sqrt(np.maximum(new_H_k, 0))
+        delta_spatial = np.sum(sqrt_new_H_k - sqrt_H_k, axis=1)  # [N]
+
+        # Compute scores: U(x) + λ * Δ_spatial(x|S)
+        scores = filtered_uncertainties + adaptive_lambda * delta_spatial
+
+        # Mask out already selected
+        scores[selected_mask] = -np.inf
+
+        # Find best candidate
+        best_idx = np.argmax(scores)
+        if scores[best_idx] == -np.inf:
+            break
+
+        # Add to selected
+        selected.append(filtered_indices[best_idx])
+        selected_mask[best_idx] = True
+
+        # Update cumulative coverage
+        H_k += h_histograms[best_idx]
+        sqrt_H_k = np.sqrt(np.maximum(H_k, 0))
+
+    return selected
+
+
+def select_samples_sparcl_det(pool_indices, uncertainties, num_samples, selected_indices,
+                              predictions=None, bin_id=None, areas=None, lambda_max=1.0, seed=None,
+                              entropy_gate=True, fixed_lambda=None):
+    """
+    SPARCL for Detection: Spatial Active Learning with Entropy-Gated Adaptive Weighting.
+
+    Detection-specific implementation that uses bbox information instead of pixel-level data.
+
+    Mathematical formulation (same as paper):
+    1. Per-image spatial histogram:
+       h_k(x) = Σ_{bbox overlapping bin k} w(bbox) * overlap_ratio
+       where w(bbox) = score(bbox) * uncertainty(bbox)
+
+    2. Entropy-gated adaptive weighting:
+       Q_k = Σ_{x∈U_t} h_k(x)  (pool-wide mass per bin)
+       q_k = Q_k / Σ_j Q_j     (normalized distribution)
+       H_pool = -Σ_k q_k * log(q_k)  (pool entropy)
+       λ^(t) = λ_max * H_pool / log(K)
+
+    3. Diminishing return function: ψ(z) = √z
+
+    4. Acquisition objective:
+       Δ(x|S) = U(x) + λ^(t) * Σ_k [ψ(H_k(S) + h_k(x)) - ψ(H_k(S))]
+
+    Args:
+        pool_indices: List of available sample indices
+        uncertainties: List of uncertainty values for each sample (U(x))
+        num_samples: Number of samples to select
+        selected_indices: List of already selected indices
+        predictions: List of detection predictions, each is a list of dicts with 'boxes', 'scores', 'labels'
+        bin_id: Tensor [H, W] - spatial bin assignments (0..K-1)
+        areas: List of (y_start, y_end, x_start, x_end, area_idx) tuples (alternative to bin_id)
+        lambda_max: Maximum weight for spatial coverage term (λ_max)
+        seed: Random seed for reproducibility
+
+    Returns:
+        List of selected sample indices
+    """
+    available_indices = [idx for idx in pool_indices if idx not in selected_indices]
+    if len(available_indices) < num_samples:
+        return available_indices
+
+    # For first round (no uncertainties), use random selection
+    if uncertainties is None or len(uncertainties) == 0:
+        return select_samples_random(pool_indices, num_samples, selected_indices, seed)
+
+    # If required data is not provided, fall back to uncertainty selection
+    if predictions is None or (bin_id is None and areas is None):
+        print(f"⚠️ SPARCL-Det selection: Missing required data (predictions={predictions is not None}, "
+              f"bin_id={bin_id is not None}, areas={areas is not None}). "
+              f"Falling back to uncertainty selection.")
+        return select_samples_uncertainty(pool_indices, uncertainties, num_samples, selected_indices, seed)
+
+    # Convert to numpy if needed
+    if torch.is_tensor(bin_id):
+        bin_id = bin_id.cpu().numpy()
+
+    # Get spatial bin information
+    if bin_id is not None:
+        H, W = bin_id.shape
+        K = int(np.max(bin_id)) + 1
+        # Convert bin_id to areas format for easier bbox overlap calculation
+        areas = []
+        for k in range(K):
+            bin_mask = (bin_id == k)
+            y_coords, x_coords = np.where(bin_mask)
+            if len(y_coords) > 0:
+                y_start, y_end = int(y_coords.min()), int(y_coords.max()) + 1
+                x_start, x_end = int(x_coords.min()), int(x_coords.max()) + 1
+                areas.append((y_start, y_end, x_start, x_end, k))
+    else:
+        # Use provided areas
+        K = len(areas)
+        H, W = 512, 512  # Default, should match dataset
+
+    # ==========================================================================
+    # Optimized index mapping for O(1) lookup
+    # ==========================================================================
+    N = len(available_indices)
+    pool_idx_to_pos = {idx: pos for pos, idx in enumerate(pool_indices)}
+    available_positions = np.array([pool_idx_to_pos[idx] for idx in available_indices])
+
+    # Pre-compute uncertainty scores for O(1) lookup
+    available_uncertainties = np.array([uncertainties[pool_idx_to_pos[idx]] for idx in available_indices])
+
+    # ==========================================================================
+    # Step 1: Calculate bbox weights and spatial histogram
+    # w(bbox) = score(bbox) * uncertainty(image)
+    # h_k(x) = Σ_{bbox overlapping bin k} w(bbox) * overlap_ratio
+    # ==========================================================================
+    def calculate_bbox_bin_overlap(bbox, bin_area):
+        """Calculate overlap ratio between bbox and bin area."""
+        y_start, y_end, x_start, x_end, _ = bin_area
+
+        # Bbox format: [x1, y1, x2, y2]
+        bbox_x1, bbox_y1, bbox_x2, bbox_y2 = bbox
+
+        # Calculate intersection
+        inter_x1 = max(bbox_x1, x_start)
+        inter_y1 = max(bbox_y1, y_start)
+        inter_x2 = min(bbox_x2, x_end)
+        inter_y2 = min(bbox_y2, y_end)
+
+        if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
+            return 0.0
+
+        # Intersection area
+        inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+
+        # Bbox area
+        bbox_area = (bbox_x2 - bbox_x1) * (bbox_y2 - bbox_y1)
+
+        if bbox_area == 0:
+            return 0.0
+
+        # Overlap ratio: intersection / bbox_area
+        return inter_area / bbox_area
+
+    # Calculate spatial histogram for each image
+    h_histograms = np.zeros((N, K), dtype=np.float32)
+
+    # Check predictions length and determine indexing
+    num_predictions = len(predictions) if predictions is not None else 0
+
+    # If predictions is too short, use uncertainty-only selection
+    if num_predictions < N * 0.5:  # Less than 50% coverage
+        print(f"[WARNING] SPARCL-Det: predictions too short ({num_predictions} vs {N} available). "
+              f"Falling back to uncertainty selection.")
+        return select_samples_uncertainty(pool_indices, uncertainties, num_samples, selected_indices, seed)
+
+    # Create a mapping from pool index to prediction index
+    # predictions come from inference in batch order, matching pool_indices order
+    for i, idx in enumerate(available_indices):
+        # predictions are indexed sequentially (0 to num_predictions-1)
+        # We need to map available_indices to prediction indices
+        # Since predictions come from iterating over pool_indices in order,
+        # we use the position in pool_indices
+        pred_idx = pool_idx_to_pos[idx]
+
+        # If pred_idx is beyond predictions length, skip this sample
+        # This can happen if predictions only cover a subset
+        if pred_idx >= num_predictions:
+            continue
+
+        pred = predictions[pred_idx]
+
+        # Get bboxes and scores
+        if isinstance(pred, list) and len(pred) > 0:
+            if isinstance(pred[0], dict):
+                boxes = pred[0]['boxes']
+                scores = pred[0]['scores']
+            else:
+                boxes = pred[0] if hasattr(pred[0], 'boxes') else []
+                scores = pred[0]['scores'] if hasattr(pred[0], 'scores') else []
+        elif isinstance(pred, dict):
+            boxes = pred.get('boxes', [])
+            scores = pred.get('scores', [])
+        else:
+            boxes = []
+            scores = []
+
+        # Convert to numpy if needed
+        if torch.is_tensor(boxes):
+            boxes = boxes.cpu().numpy()
+        if torch.is_tensor(scores):
+            scores = scores.cpu().numpy()
+
+        if len(boxes) == 0:
+            # No detections: h_k(x) = 0 for all bins
+            continue
+
+        # Get image-level uncertainty
+        img_uncertainty = available_uncertainties[i]
+
+        # Calculate weight for each bbox using entropy (like SPARCL)
+        # w(bbox) = score * entropy(score) - gives higher weight to uncertain bboxes
+        eps_score = 1e-8
+        scores_safe = np.clip(scores, eps_score, 1 - eps_score)
+        bbox_entropy = -(scores_safe * np.log(scores_safe) + (1 - scores_safe) * np.log(1 - scores_safe))
+        bbox_weights = scores * bbox_entropy  # lesionness(score) × entropy(score)
+
+        # Calculate spatial histogram: h_k(x) = Σ_{bbox overlapping bin k} w(bbox) * overlap_ratio
+        for bbox, weight in zip(boxes, bbox_weights):
+            for bin_idx, bin_area in enumerate(areas):
+                overlap_ratio = calculate_bbox_bin_overlap(bbox, bin_area)
+                if overlap_ratio > 0:
+                    h_histograms[i, bin_idx] += weight * overlap_ratio
+
+    # ==========================================================================
+    # Step 2: Entropy-gated adaptive weighting
+    # Q_k = Σ_{x∈U_t} h_k(x)  (pool-wide mass per bin)
+    # q_k = Q_k / Σ_j Q_j     (normalized distribution)
+    # H_pool = -Σ_k q_k * log(q_k)
+    # λ^(t) = λ_max * H_pool / log(K)
+    # ==========================================================================
+    eps = 1e-8
+    Q_k = np.sum(h_histograms, axis=0)  # [K] - pool-wide mass per bin
+    Q_total = np.sum(Q_k) + eps
+    q_k = Q_k / Q_total  # Normalized distribution
+
+    # Pool entropy: H_pool = -Σ_k q_k * log(q_k)
+    q_k_safe = np.clip(q_k, eps, 1.0)
+    H_pool = -np.sum(q_k * np.log(q_k_safe))
+
+    # Lambda computation (paper-default: entropy-gated; ablations override).
+    # - entropy_gate=True (default): λ^(t) = λ_max * H_pool / log(K)
+    # - entropy_gate=False: λ^(t) = λ_max  (no gating)
+    # - fixed_lambda set: λ^(t) = fixed_lambda  (override entirely)
+    log_K = np.log(K) if K > 1 else 1.0
+    if fixed_lambda is not None:
+        adaptive_lambda = fixed_lambda
+    elif entropy_gate:
+        adaptive_lambda = lambda_max * (H_pool / log_K)
+    else:
+        adaptive_lambda = lambda_max
+
+    # ==========================================================================
+    # Step 3: Vectorized greedy selection
+    # ψ(z) = √z
+    # Δ(x|S) = U(x) + λ^(t) * Σ_k [ψ(H_k(S) + h_k(x)) - ψ(H_k(S))]
+    # ==========================================================================
+    selected = []
+    selected_mask = np.zeros(N, dtype=bool)
+    H_k = np.zeros(K, dtype=np.float32)  # Cumulative coverage
+    sqrt_H_k = np.zeros(K, dtype=np.float32)
+
+    for _ in range(min(num_samples, N)):
+        # Vectorized: compute delta_spatial for all candidates at once
+        new_H_k = H_k + h_histograms  # [N, K]
+        sqrt_new_H_k = np.sqrt(np.maximum(new_H_k, 0))
+        delta_spatial = np.sum(sqrt_new_H_k - sqrt_H_k, axis=1)  # [N]
+
+        # Compute scores: U(x) + λ * Δ_spatial(x|S)
+        scores = available_uncertainties + adaptive_lambda * delta_spatial
+
+        # Mask out already selected
+        scores[selected_mask] = -np.inf
+
+        # Find best candidate
+        best_local_idx = np.argmax(scores)
+        if scores[best_local_idx] == -np.inf:
+            break
+
+        # Add to selected
+        selected.append(available_indices[best_local_idx])
+        selected_mask[best_local_idx] = True
+
+        # Update cumulative coverage
+        H_k += h_histograms[best_local_idx]
+        sqrt_H_k = np.sqrt(np.maximum(H_k, 0))
+
+    return selected
+
+
+def select_samples_sparcl_det_no_gating(pool_indices, uncertainties, num_samples, selected_indices,
+                                        predictions=None, bin_id=None, areas=None, lambda_max=1.0, seed=None):
+    """SPARCL-Det ablation: no entropy gating. Uses lambda^(t) = lambda_max constantly."""
+    return select_samples_sparcl_det(pool_indices, uncertainties, num_samples, selected_indices,
+                                     predictions=predictions, bin_id=bin_id, areas=areas,
+                                     lambda_max=lambda_max, seed=seed, entropy_gate=False)
+
+
+def select_samples_sparcl_det_fixed_lambda(pool_indices, uncertainties, num_samples, selected_indices,
+                                           predictions=None, bin_id=None, areas=None, lambda_max=0.5, seed=None):
+    """SPARCL-Det ablation: fixed lambda (default 0.5). No adaptive gating."""
+    return select_samples_sparcl_det(pool_indices, uncertainties, num_samples, selected_indices,
+                                     predictions=predictions, bin_id=bin_id, areas=areas,
+                                     lambda_max=lambda_max, seed=seed, fixed_lambda=lambda_max)
+
+
 # Selection strategy mapping
 SELECTION_STRATEGIES = {
     'random': select_samples_random,
@@ -1181,7 +1892,18 @@ SELECTION_STRATEGIES = {
     'adaptive_ultra': select_samples_adaptive_ultra,
     'adaptive_improved_ultra': select_samples_adaptive_improved_ultra,
     'adaptive_multi_scale_ultra': select_samples_multi_scale_hybrid_ultra,
-    'adaptive_performance_monitoring_ultra': select_samples_adaptive_performance_monitoring_ultra}
+    'adaptive_performance_monitoring_ultra': select_samples_adaptive_performance_monitoring_ultra,
+    # SPARCL: Paper-exact implementation
+    'sparcl': select_samples_sparcl,
+    'sparcl_prefiltering': select_samples_sparcl_prefiltering,
+    'sparcl_det': select_samples_sparcl_det,  # Detection-specific SPARCL
+    # SPARCL ablation variants for MICCAI 2026 rebuttal (component-level)
+    'sparcl_no_gating': select_samples_sparcl_no_gating,
+    'sparcl_fixed_lambda': select_samples_sparcl_fixed_lambda,
+    'sparcl_no_coverage': select_samples_sparcl_no_coverage,
+    'sparcl_det_no_gating': select_samples_sparcl_det_no_gating,
+    'sparcl_det_fixed_lambda': select_samples_sparcl_det_fixed_lambda,
+}
 
 
 def get_selection_strategy(strategy_name):

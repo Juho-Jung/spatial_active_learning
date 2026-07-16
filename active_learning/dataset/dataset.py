@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Dataset classes for active learning (segmentation and detection).
+Dataset classes for SAM adaptation project.
 """
 
 import json
 import os
+# Add project root to path
 import sys
 from pathlib import Path
 
@@ -16,11 +17,7 @@ import torch
 import utils.image_io as image_io
 from torch.utils.data import Dataset
 
-# Project root (parent of active_learning/); label data under data/labels/
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_LABEL_DATA_ROOT = _PROJECT_ROOT / "data" / "labels"
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+sys.path.append('/opt/pxi')
 
 
 class LesionDataset(Dataset):
@@ -47,7 +44,7 @@ class LesionDataset(Dataset):
         # Calculate weights for weighted sampling
         self._calculate_weights()
 
-        print(f"{split.capitalize()} dataset statistics:")
+        print(f"📊 {split.capitalize()} Dataset Statistics:")
         print(f"   Total documents: {len(self.documents)}")
         self._print_statistics()
 
@@ -82,7 +79,7 @@ class LesionDataset(Dataset):
             if data_source not in excluded_sources:
                 documents.append(doc)
 
-        print(f"Validation collection: {len(all_docs)} -> {len(documents)} (after filtering)")
+        print(f"📊 Validation Collection: {len(all_docs)} -> {len(documents)} (after filtering)")
         return documents
 
     def _load_train_documents(self):
@@ -115,103 +112,103 @@ class LesionDataset(Dataset):
         target = self.target_lesion[0] if isinstance(self.target_lesion, list) else self.target_lesion
 
         if target == 'calcification':
-            first_round_path = _LABEL_DATA_ROOT / "aortic_calcification" / "converted_mdb_data_1st_round.json"
-            second_round_path = _LABEL_DATA_ROOT / "aortic_calcification" / "converted_mdb_data_2nd_round.json"
-            third_round_path = _LABEL_DATA_ROOT / "aortic_calcification" / "converted_mdb_data_3rd_round.json"
+            first_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/aortic_calcification/converted_mdb_data_1st_round.json"
+            second_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/aortic_calcification/converted_mdb_data_2nd_round.json"
+            third_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/aortic_calcification/converted_mdb_data_3rd_round.json"
         elif target == 'calcifiednodule':
-            first_round_path = _LABEL_DATA_ROOT / "calcifiednodule" / "converted_mdb_data_calcifiednodule_1st_round.json"
-            second_round_path = _LABEL_DATA_ROOT / "calcifiednodule" / "converted_mdb_data_calcifiednodule_2nd_round.json"
+            first_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/calcifiednodule/converted_mdb_data_calcifiednodule_1st_round.json"
+            second_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/calcifiednodule/converted_mdb_data_calcifiednodule_2nd_round.json"
         else:
             return []  # Return empty list instead of dict for concatenation
 
-        calcification_dir = _LABEL_DATA_ROOT / "calcification"
-        gangnam_severance_first_round_path = calcification_dir / "converted_mdb_gangnam_severance_1st_round.json"
-        caln_negative_first_round_path = calcification_dir / "converted_mdb_caln_negative_1st_round.json"
-        caln_negative_second_round_path = calcification_dir / "converted_mdb_caln_negative_2nd_round.json"
-        caln_negative_third_round_complete_28_case_path = calcification_dir / "converted_mdb_caln_negative_3rd_round_complete_28case.json"
-        caln_negative_third_round_path = calcification_dir / "converted_mdb_caln_negative_3rd_round.json"
-        caln_positive_first_round_path = calcification_dir / "converted_mdb_caln_positive_1st_round.json"
+        gangnam_severance_first_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/calcification/converted_mdb_gangnam_severance_1st_round.json"
+        caln_negative_first_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/calcification/converted_mdb_caln_negative_1st_round.json"
+        caln_negative_second_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/calcification/converted_mdb_caln_negative_2nd_round.json"
+        caln_negative_third_round_complete_28_case_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/calcification/converted_mdb_caln_negative_3rd_round_complete_28case.json"
+        caln_negative_third_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/calcification/converted_mdb_caln_negative_3rd_round.json"
+
+        caln_positive_first_round_path = "/team/team_pxi/workspace/juhojung/calcification_checkpoint/labeled_json_file/calcification/converted_mdb_caln_positive_1st_round.json"
 
         # Load caln_positive_first_round
-        if not caln_positive_first_round_path.exists():
+        if not os.path.exists(caln_positive_first_round_path):
             print(f"   Warning: {caln_positive_first_round_path} not found")
             converted_data_caln_positive_first_round = {}
         else:
-            with open(caln_positive_first_round_path, encoding='utf-8') as f:
+            with open(caln_positive_first_round_path, 'r') as f:
                 converted_data_caln_positive_first_round = json.load(f)
             print(f"   Loaded {len(converted_data_caln_positive_first_round)} entries from caln_positive_first_round")
 
         # Load gangnam_severance_first_round
-        if not gangnam_severance_first_round_path.exists():
+        if not os.path.exists(gangnam_severance_first_round_path):
             print(f"   Warning: {gangnam_severance_first_round_path} not found")
             converted_data_gangnam_severance_first_round = {}
         else:
-            with open(gangnam_severance_first_round_path, encoding='utf-8') as f:
+            with open(gangnam_severance_first_round_path, 'r') as f:
                 converted_data_gangnam_severance_first_round = json.load(f)
             print(f"   Loaded {len(converted_data_gangnam_severance_first_round)} entries from gangnam_severance_first_round")
 
         # Load caln_negative_first_round
-        if not caln_negative_first_round_path.exists():
+        if not os.path.exists(caln_negative_first_round_path):
             print(f"   Warning: {caln_negative_first_round_path} not found")
             converted_data_caln_negative_first_round = {}
         else:
-            with open(caln_negative_first_round_path, encoding='utf-8') as f:
+            with open(caln_negative_first_round_path, 'r') as f:
                 converted_data_caln_negative_first_round = json.load(f)
             print(f"   Loaded {len(converted_data_caln_negative_first_round)} entries from caln_negative_first_round")
 
         # Load caln_negative_third_round_complete_28_case
-        if not caln_negative_third_round_complete_28_case_path.exists():
+        if not os.path.exists(caln_negative_third_round_complete_28_case_path):
             print(f"   Warning: {caln_negative_third_round_complete_28_case_path} not found")
             converted_data_caln_negative_third_round_complete_28_case = {}
         else:
-            with open(caln_negative_third_round_complete_28_case_path, encoding='utf-8') as f:
+            with open(caln_negative_third_round_complete_28_case_path, 'r') as f:
                 converted_data_caln_negative_third_round_complete_28_case = json.load(f)
             print(
                 f"   Loaded {len(converted_data_caln_negative_third_round_complete_28_case)} entries from caln_negative_third_round_complete_28_case")
 
         # Load caln_negative_second_round
-        if not caln_negative_second_round_path.exists():
+        if not os.path.exists(caln_negative_second_round_path):
             print(f"   Warning: {caln_negative_second_round_path} not found")
             converted_data_caln_negative_second_round = {}
         else:
-            with open(caln_negative_second_round_path, encoding='utf-8') as f:
+            with open(caln_negative_second_round_path, 'r') as f:
                 converted_data_caln_negative_second_round = json.load(f)
             print(f"   Loaded {len(converted_data_caln_negative_second_round)} entries from caln_negative_second_round")
 
         # Load caln_negative_third_round
-        if not caln_negative_third_round_path.exists():
+        if not os.path.exists(caln_negative_third_round_path):
             print(f"   Warning: {caln_negative_third_round_path} not found")
             converted_data_caln_negative_third_round = {}
         else:
-            with open(caln_negative_third_round_path, encoding='utf-8') as f:
+            with open(caln_negative_third_round_path, 'r') as f:
                 converted_data_caln_negative_third_round = json.load(f)
             print(f"   Loaded {len(converted_data_caln_negative_third_round)} entries from caln_negative_third_round")
 
         # Load first round
-        if not first_round_path.exists():
+        if not os.path.exists(first_round_path):
             print(f"   Warning: {first_round_path} not found")
             converted_data_first_round = {}
         else:
-            with open(first_round_path, encoding='utf-8') as f:
+            with open(first_round_path, 'r') as f:
                 converted_data_first_round = json.load(f)
             print(f"   Loaded {len(converted_data_first_round)} entries from first round")
 
         # Load second round
-        if not second_round_path.exists():
+        if not os.path.exists(second_round_path):
             print(f"   Warning: {second_round_path} not found")
             converted_data_second_round = {}
         else:
-            with open(second_round_path, encoding='utf-8') as f:
+            with open(second_round_path, 'r') as f:
                 converted_data_second_round = json.load(f)
             print(f"   Loaded {len(converted_data_second_round)} entries from second round")
 
         # Load third round for aortic calcification
         if target == 'calcification':
-            if not third_round_path.exists():
+            if not os.path.exists(third_round_path):
                 print(f"   Warning: {third_round_path} not found")
                 converted_data_third_round = {}
             else:
-                with open(third_round_path, encoding='utf-8') as f:
+                with open(third_round_path, 'r') as f:
                     converted_data_third_round = json.load(f)
                 print(f"   Loaded {len(converted_data_third_round)} entries from third round")
 
@@ -241,7 +238,7 @@ class LesionDataset(Dataset):
             if 'path_dicom' not in doc:
                 continue
             try:
-                # Extract stem from path_dicom (e.g. "0064493-0000345" from "dataset/cxr/.../0064493-0000345.dcm")
+                # Extract stem from path_dicom (e.g., "0064493-0000345" from "pxi-dataset/cxr/private/internal/210124_nipa/dicom/0064493-0000345.dcm")
                 path_dicom = doc['path_dicom']
                 stem = Path(path_dicom).stem
                 doc_mapping[stem] = doc
@@ -342,7 +339,7 @@ class LesionDataset(Dataset):
         np.random.seed(42)
         np.random.shuffle(filtered_docs)
 
-        print(f"Train collection: {len(filtered_docs)} (after filtering)")
+        print(f"📊 Train Collection: {len(filtered_docs)} (after filtering)")
         return filtered_docs
 
     def _load_sdc_ppm_train_documents(self):
@@ -357,7 +354,7 @@ class LesionDataset(Dataset):
 
         documents = list(collection.find(query).sort('_id', 1))  # Sort by _id for consistent ordering
 
-        print(f"Train collection: {len(documents)}")
+        print(f"📊 Train Collection: {len(documents)}")
         return documents
 
     def _create_split(self):
@@ -393,7 +390,7 @@ class LesionDataset(Dataset):
 
         # Apply limit if specified
         if self.limit is not None and len(self.documents) > self.limit:
-            print(f"Limiting dataset to {self.limit} samples (from {len(self.documents)})")
+            print(f"📊 Limiting dataset to {self.limit} samples (from {len(self.documents)})")
             self.documents = self.documents[:self.limit]
 
     def _setup_transforms(self):
@@ -592,13 +589,13 @@ def _get_mask_from_doc(doc, target_lesion, target_size=(512, 512)):
                             import cv2
                             cv2.fillPoly(mask, [coords], 1)
                     except Exception as e:
-                        print(f"Error creating mask from polygon: {e}")
+                        print(f"⚠️  Error creating mask from polygon: {e}")
                         continue
 
         return mask.astype(np.float32)
 
     except Exception as e:
-        print(f"Error extracting mask from document: {e}")
+        print(f"⚠️  Error extracting mask from document: {e}")
         return None
 
 
@@ -653,22 +650,22 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
         else:
             negative_docs.append(doc)
 
-    print(f"Total positive documents: {len(positive_docs)}")
-    print(f"Total negative documents: {len(negative_docs)}")
+    print(f"📊 Total positive documents: {len(positive_docs)}")
+    print(f"📊 Total negative documents: {len(negative_docs)}")
     if include_negative:
-        print("Including all negative samples in dataset")
+        print(f"📊 Including ALL negative samples in dataset")
 
     # Calculate training samples
     total_training_samples = num_samples_per_round * num_rounds
-    print(f"Total samples for training: {total_training_samples} ({num_samples_per_round} x {num_rounds} rounds)")
+    print(f"📊 Total samples for training: {total_training_samples} ({num_samples_per_round} × {num_rounds} rounds)")
 
     # Determine validation samples
     if num_validation_samples is None:
         num_validation_samples = len(positive_docs) - total_training_samples
-    print(f"Target validation samples: {num_validation_samples}")
+    print(f"📊 Target validation samples: {num_validation_samples}")
 
     if num_validation_samples <= 0:
-        print("Warning: Not enough data for validation; all data will be used for training.")
+        print("⚠️  Warning: Not enough data for validation! All data will be used for training.")
         return positive_docs, []
 
     # Analyze spatial distribution of each document
@@ -696,11 +693,11 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
             doc_area_mapping[best_area_idx].append(doc)
 
         except Exception as e:
-            print(f"Warning: Could not process document {doc.get('_id', 'unknown')}: {e}")
+            print(f"⚠️  Warning: Could not process document {doc.get('_id', 'unknown')}: {e}")
             continue
 
     # Print area distribution
-    print("Document distribution by spatial areas:")
+    print("📊 Document distribution by spatial areas:")
     for i, docs in enumerate(doc_area_mapping):
         print(f"   Area {i + 1}: {len(docs)} documents")
 
@@ -713,7 +710,7 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
         target_per_area = num_validation_samples // len(areas)
         remaining_samples = num_validation_samples % len(areas)
 
-        print(f"Target samples per area: {target_per_area} (with {remaining_samples} extra)")
+        print(f"📊 Target samples per area: {target_per_area} (with {remaining_samples} extra)")
 
         for i, docs in enumerate(doc_area_mapping):
             # Calculate how many samples to take from this area
@@ -726,11 +723,11 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
             if len(docs) - samples_from_area < min_samples_for_training:
                 samples_from_area = max(0, len(docs) - min_samples_for_training)
                 print(
-                    f"Area {i + 1}: Limited to {samples_from_area} samples to preserve training data (requested {target_per_area + (1 if i < remaining_samples else 0)})")
+                    f"⚠️  Area {i + 1}: Limited to {samples_from_area} samples to preserve training data (requested {target_per_area + (1 if i < remaining_samples else 0)})")
             elif len(docs) < samples_from_area:
                 samples_from_area = len(docs)
                 print(
-                    f"Area {i + 1}: Only {len(docs)} samples available (requested {target_per_area + (1 if i < remaining_samples else 0)})")
+                    f"⚠️  Area {i + 1}: Only {len(docs)} samples available (requested {target_per_area + (1 if i < remaining_samples else 0)})")
 
             # Randomly sample from this area with reproducible seed
             if samples_from_area > 0:
@@ -749,7 +746,7 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
         total_docs = sum(len(docs) for docs in doc_area_mapping)
         distribution_ratios = [len(docs) / total_docs for docs in doc_area_mapping]
 
-        print(f"Data distribution ratios: {[f'{ratio:.3f}' for ratio in distribution_ratios]}")
+        print(f"📊 Data distribution ratios: {[f'{ratio:.3f}' for ratio in distribution_ratios]}")
 
         for i, (docs, ratio) in enumerate(zip(doc_area_mapping, distribution_ratios)):
             # Calculate target samples for this area based on its data ratio
@@ -762,7 +759,7 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
             min_samples_for_training = max(1, len(docs) // 2)  # Keep at least 50% for training
             if len(docs) - samples_from_area < min_samples_for_training:
                 samples_from_area = max(0, len(docs) - min_samples_for_training)
-                print(f"Area {i + 1}: Limited to {samples_from_area} samples to preserve training data")
+                print(f"⚠️  Area {i + 1}: Limited to {samples_from_area} samples to preserve training data")
 
             # Randomly sample from this area with reproducible seed
             if samples_from_area > 0:
@@ -779,7 +776,7 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
     # Handle redistribution for spatial_equal_split only
     if validation_mode == 'spatial_equal_split' and len(val_docs) < num_validation_samples:
         needed_samples = num_validation_samples - len(val_docs)
-        print(f"Need {needed_samples} more samples, redistributing based on data distribution...")
+        print(f"📊 Need {needed_samples} more samples, redistributing based on data distribution...")
 
         # Calculate distribution ratios
         total_docs = sum(len(docs) for docs in doc_area_mapping)
@@ -806,7 +803,7 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
     # Include ALL negative samples if requested
     if include_negative:
         train_docs.extend(negative_docs)
-        print(f"Added {len(negative_docs)} negative samples to training pool")
+        print(f"📊 Added {len(negative_docs)} negative samples to training pool")
 
     # Shuffle the results with reproducible seed
     np.random.seed(seed + 9999)  # Use different seed for final shuffling
@@ -814,12 +811,12 @@ def create_spatial_validation_split(documents, target_lesion, num_samples_per_ro
     np.random.shuffle(train_docs)
 
     total_docs = len(positive_docs) + (len(negative_docs) if include_negative else 0)
-    print(f"Final split: {len(val_docs)} validation, {len(train_docs)} training samples")
+    print(f"📊 Final split: {len(val_docs)} validation, {len(train_docs)} training samples")
     print(
-        f"Data utilization: {len(val_docs) + len(train_docs)}/{total_docs} ({100 * (len(val_docs) + len(train_docs)) / total_docs:.1f}%)")
+        f"📊 Data utilization: {len(val_docs) + len(train_docs)}/{total_docs} ({100 * (len(val_docs) + len(train_docs)) / total_docs:.1f}%)")
 
     # Print final area distribution
-    print("Final validation samples per area:")
+    print("📊 Final validation samples per area:")
     for i, count in enumerate(area_allocations):
         print(f"   Area {i + 1}: {count} samples")
 
@@ -844,7 +841,7 @@ def load_raw_documents(train_collection='validation_collection', target_lesion='
             if data_source not in excluded_sources:
                 documents.append(doc)
 
-        print(f"Loaded {len(documents)} raw documents from validation_internal")
+        print(f"📊 Loaded {len(documents)} raw documents from validation_internal")
         return documents
     else:
         # For other collections, create a temporary dataset to access documents
@@ -877,7 +874,7 @@ class SpatialSplitDataset(LesionDataset):
         self._calculate_weights()
 
         # Print statistics
-        print("Pre-split dataset statistics:")
+        print(f"📊 Pre-split Dataset Statistics:")
         print(f"   Total documents: {len(self.documents)}")
         self._print_statistics()
 
@@ -928,7 +925,7 @@ def create_al_datasets(args):
         return create_chestxdet10_al_datasets(args)
     else:
         # Use MongoDB collections (default)
-        print(f"Loading data from {args.collection}...")
+        print(f"📊 Loading data from {args.collection}...")
         raw_documents = load_raw_documents(args.collection, args.target_lesion)
 
         if args.validate_data_mode == 'random_split':
@@ -978,15 +975,16 @@ def _create_random_split_datasets(raw_documents, args):
     if include_negative:
         all_docs = positive_docs + negative_docs
         np.random.shuffle(all_docs)
-        print(f"Including all negative samples: {len(positive_docs)} positive + {len(negative_docs)} negative = {len(all_docs)} total")
+        print(
+            f"📊 Including ALL negative samples: {len(positive_docs)} positive + {len(negative_docs)} negative = {len(all_docs)} total")
     else:
         all_docs = positive_docs
-        print(f"Using positive samples only: {len(positive_docs)} samples")
+        print(f"📊 Using positive samples only: {len(positive_docs)} samples")
 
     num_val = args.num_validation_samples or max(1, len(all_docs) // 5)
     num_val = min(num_val, len(all_docs))
 
     val_docs, train_docs = all_docs[:num_val], all_docs[num_val:]
-    print(f"Split: {len(val_docs)} validation, {len(train_docs)} training")
+    print(f"📊 Split: {len(val_docs)} validation, {len(train_docs)} training")
 
     return SpatialSplitDataset(train_docs, args.target_lesion), SpatialSplitDataset(val_docs, args.target_lesion)
