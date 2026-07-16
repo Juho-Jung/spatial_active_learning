@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Uncertainty estimation module for SAM adaptation project.
+Uncertainty estimation module for SPARCL.
 
 This module contains various uncertainty estimation methods for active learning
 including base uncertainty and Monte Carlo dropout uncertainty.

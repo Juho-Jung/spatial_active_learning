@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Training utilities for SAM adaptation project.
+Training utilities for SPARCL.
 
 This module contains training-related functions including model training,
 early stopping, and logging utilities.
@@ -14,11 +14,11 @@ import numpy as np
 import torch
 import torch.optim as optim
 from losses import combo_loss
-from losses.detection_losses import detection_loss
+from losses.detection import detection_loss
 from metrics import (calculate_bin_dice_metrics, calculate_metrics,
                      calculate_performance_coverage,
                      calculate_spatial_consistency, divide_image_into_areas)
-from metrics.detection_metrics import calculate_detection_metrics_simple
+from metrics.detection import calculate_detection_metrics_simple
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -402,7 +402,7 @@ def _validate_epoch(model, val_loader, criterion, areas, device, task_type='segm
                 val_loss += loss.item()
 
                 # Calculate full detection metrics including mAP, AP50, FROC
-                from metrics.detection_metrics import \
+                from metrics.detection import \
                     calculate_detection_metrics
                 det_metrics = calculate_detection_metrics(predictions, target_list, iou_threshold=0.5)
 

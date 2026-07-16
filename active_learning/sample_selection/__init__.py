@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Sample selection module for SAM adaptation project.
+Sample selection module for SPARCL.
 
 This module contains various sample selection strategies for active learning
-including random, uncertainty-based, area-based, and diversity-based selection methods.
+including random, uncertainty-based, area-based, and diversity-based selection
+methods, plus the SPARCL acquisition and its ablations.
 """
 
 from .sample_selection import (SELECTION_STRATEGIES, create_spatial_bins,
@@ -18,15 +19,9 @@ from .sample_selection import (SELECTION_STRATEGIES, create_spatial_bins,
                                select_samples_sparcl_no_gating,
                                select_samples_uncertainty,
                                select_samples_uncertainty_area)
-from .sample_selection_alunet import (select_samples_mcd_alunet,
-                                      select_samples_usimc)
-from .sample_selection_coreset import select_samples_coreset
-from .sample_selection_lunit import select_samples_lunit
-from .sample_selection_TAUDIS import select_samples_TAUDIS
-from .sample_selection_ultra import (
-    select_samples_adaptive_improved_ultra,
-    select_samples_adaptive_performance_monitoring_ultra,
-    select_samples_adaptive_ultra, select_samples_multi_scale_hybrid_ultra)
+from .baselines import (select_samples_coreset, select_samples_lunit,
+                        select_samples_mcd_alunet, select_samples_TAUDIS,
+                        select_samples_usimc)
 
 __all__ = [
     'create_spatial_bins',

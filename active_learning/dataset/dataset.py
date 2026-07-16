@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Dataset classes for SAM adaptation project.
+Dataset classes for SPARCL.
 """
 
 import json
@@ -913,15 +913,15 @@ def create_al_datasets(args):
 
     if dataset_source == 'vindr':
         # Use VinDr-CXR public dataset
-        from .vindr_cxr_dataset import create_vindr_al_datasets
+        from .public.vindr_cxr import create_vindr_al_datasets
         return create_vindr_al_datasets(args)
     elif dataset_source == 'siim':
         # Use SIIM-ACR Pneumothorax Segmentation dataset
-        from .siim_dataset import create_siim_al_datasets
+        from .public.siim import create_siim_al_datasets
         return create_siim_al_datasets(args)
     elif dataset_source == 'chestxdet10':
         # Use ChestX-Det10 dataset
-        from .chestxdet10_dataset import create_chestxdet10_al_datasets
+        from .public.chestxdet10 import create_chestxdet10_al_datasets
         return create_chestxdet10_al_datasets(args)
     else:
         # Use MongoDB collections (default)

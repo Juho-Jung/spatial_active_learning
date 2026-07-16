@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Loss functions module for SAM adaptation project.
+Loss functions module for SPARCL.
 
-This module contains various loss functions for segmentation tasks including
-Dice loss, Focal loss, and combined loss functions.
+This module contains segmentation loss functions (Dice, Focal, and combined
+losses). Detection losses live in ``losses.detection``.
 """
 
-from .losses import (
+from .segmentation import (
     dice_loss,
     focal_loss,
     combo_loss,

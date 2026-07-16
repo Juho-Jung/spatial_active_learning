@@ -15,7 +15,7 @@ from base_utils import (log_final_results, plot_spatial_metrics_curves,
 from dataset import create_al_datasets
 from metrics import divide_image_into_areas
 from models import create_model
-from models.detection_models import create_detection_model
+from models.detection import create_detection_model
 from sample_selection import create_spatial_bins, get_selection_strategy
 from torch.utils.data import DataLoader
 from training import train_model_round
@@ -31,8 +31,7 @@ RANDOM_STRATEGIES = {'random', 'area_random'}
 UNCERTAINTY_STRATEGIES = {'uncertainty', 'uncertainty_area', 'mcd_alunet'}
 ADAPTIVE_STRATEGIES = {
     'adaptive', 'adaptive_improved', 'adaptive_multi_scale',
-    'adaptive_performance_monitoring', 'adaptive_ultra', 'adaptive_improved_ultra',
-    'adaptive_multi_scale_ultra', 'adaptive_performance_monitoring_ultra',
+    'adaptive_performance_monitoring',
     'sparcl', 'sparcl_prefiltering', 'sparcl_det',  # Paper-exact implementation (sparcl_det for detection)
     # SPARCL ablation variants for MICCAI 2026 rebuttal
     'sparcl_no_gating', 'sparcl_fixed_lambda', 'sparcl_no_coverage',
@@ -197,7 +196,7 @@ def prepare_selection_args(args, model, full_dataset, pool_indices, selected_ind
                 h, w = full_dataset.target_size
             args.bin_id = create_spatial_bins(h, w, grid_width=args.grid_width, grid_height=args.grid_height)
             # Also create areas for easier bbox overlap calculation
-            from metrics.metrics import divide_image_into_areas
+            from metrics.segmentation import divide_image_into_areas
             args.areas = divide_image_into_areas(image_size=(h, w),
                                                  grid_width=args.grid_width,
                                                  grid_height=args.grid_height)
@@ -246,7 +245,7 @@ def select_samples(args, pool_indices, uncertainties, selected_indices, areas, r
     if args.mode == 'lunit':
         return func(pool_indices, uncertainties, args.num_samples, selected_indices,
                     args.model, args.dataloader, args.device, seed)
-    if args.mode in {'adaptive', 'adaptive_ultra', 'adaptive_improved', 'adaptive_improved_ultra'}:
+    if args.mode in {'adaptive', 'adaptive_improved'}:
         return func(pool_indices, uncertainties, args.num_samples, selected_indices,
                     args.probs, args.lesionness, args.bin_id, args.lambda1, seed)
     if args.mode in {'sparcl', 'sparcl_prefiltering'}:
@@ -259,11 +258,11 @@ def select_samples(args, pool_indices, uncertainties, selected_indices, areas, r
         # Detection-specific SPARCL: uses predictions (bboxes) instead of probs/lesionness
         return func(pool_indices, uncertainties, args.num_samples, selected_indices,
                     args.predictions, args.bin_id, args.areas, args.lambda1, seed)
-    if args.mode in {'adaptive_multi_scale', 'adaptive_multi_scale_ultra'}:
+    if args.mode == 'adaptive_multi_scale':
         return func(pool_indices, uncertainties, args.num_samples, selected_indices,
                     args.probs, args.lesionness, args.bin_id, args.lambda1,
                     [(3, 3), (5, 5), (7, 7)], seed)
-    if args.mode in {'adaptive_performance_monitoring', 'adaptive_performance_monitoring_ultra'}:
+    if args.mode == 'adaptive_performance_monitoring':
         return func(pool_indices, uncertainties, args.num_samples, selected_indices,
                     args.probs, args.lesionness, args.bin_id, args.lambda1,
                     getattr(args, 'performance_history', None), seed)

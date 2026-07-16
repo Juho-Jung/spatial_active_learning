@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Training module for SAM adaptation project.
+Training module for SPARCL.
 
 This module contains training utilities including model training functions,
 early stopping, and logging utilities for active learning experiments.

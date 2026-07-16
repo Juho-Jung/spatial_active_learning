@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Base utilities module for SAM adaptation project.
+Base utilities module for SPARCL.
 
 This module contains utility functions for setting up training environments,
 logging, distributed training, and visualization.

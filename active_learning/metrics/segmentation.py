@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Evaluation metrics for SAM adaptation project.
+Evaluation metrics for SPARCL.
 """
 
 import torch

@@ -9,47 +9,28 @@ experiments, including random, uncertainty-based, and area-based selection metho
 import numpy as np
 import torch
 
-# Import ULTRA AGGRESSIVE versions
+# Baseline AL strategies: Coreset (ICLR 2018), TAUDIS (ICCV 2023),
+# ALUNET (MIDL 2024), LUNIT / Learning Loss (CVPR 2019).
 try:
-    from .sample_selection_ultra import (
-        select_samples_adaptive_improved_ultra,
-        select_samples_adaptive_performance_monitoring_ultra,
-        select_samples_adaptive_ultra, select_samples_multi_scale_hybrid_ultra)
+    from .baselines.coreset import select_samples_coreset
 except ImportError:
-    # Fallback if ultra versions are not available
-    select_samples_adaptive_ultra = None
-    select_samples_adaptive_improved_ultra = None
-    select_samples_multi_scale_hybrid_ultra = None
-    select_samples_adaptive_performance_monitoring_ultra = None
-
-# Import Coreset (ICLR 2018)
-try:
-    from .sample_selection_coreset import select_samples_coreset
-except ImportError:
-    # Fallback if coreset is not available
     select_samples_coreset = None
 
-# Import TAUDIS (ICCV 2023)
 try:
-    from .sample_selection_TAUDIS import select_samples_TAUDIS
+    from .baselines.taudis import select_samples_TAUDIS
 except ImportError:
-    # Fallback if TAUDIS is not available
     select_samples_TAUDIS = None
 
-# Import ALUNET strategies (MIDL 2024)
 try:
-    from .sample_selection_alunet import (select_samples_mcd_alunet,
-                                          select_samples_usimc)
+    from .baselines.alunet import (select_samples_mcd_alunet,
+                                   select_samples_usimc)
 except ImportError:
-    # Fallback if ALUNET strategies are not available
     select_samples_usimc = None
     select_samples_mcd_alunet = None
 
-# Import LUNIT strategy (Learning Loss, CVPR 2019)
 try:
-    from .sample_selection_lunit import select_samples_lunit
+    from .baselines.lunit import select_samples_lunit
 except ImportError:
-    # Fallback if LUNIT is not available
     select_samples_lunit = None
 
 
@@ -1888,11 +1869,6 @@ SELECTION_STRATEGIES = {
     'mcd_alunet': select_samples_mcd_alunet,
     # LUNIT strategy (Learning Loss, CVPR 2019)
     'lunit': select_samples_lunit,
-    # ULTRA AGGRESSIVE versions
-    'adaptive_ultra': select_samples_adaptive_ultra,
-    'adaptive_improved_ultra': select_samples_adaptive_improved_ultra,
-    'adaptive_multi_scale_ultra': select_samples_multi_scale_hybrid_ultra,
-    'adaptive_performance_monitoring_ultra': select_samples_adaptive_performance_monitoring_ultra,
     # SPARCL: Paper-exact implementation
     'sparcl': select_samples_sparcl,
     'sparcl_prefiltering': select_samples_sparcl_prefiltering,

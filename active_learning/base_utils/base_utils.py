@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Utility functions for SAM adaptation project.
+Utility functions for SPARCL.
 """
 
 import logging
@@ -37,7 +37,7 @@ def setup_logger(session_dir, rank=0):
     os.makedirs(logs_dir, exist_ok=True)
 
     # Setup logger
-    logger = logging.getLogger('SAM_Training')
+    logger = logging.getLogger('SPARCL')
     logger.setLevel(logging.INFO)
 
     # Remove existing handlers
@@ -94,7 +94,7 @@ def create_session_dir(target_lesion, timestamp=None):
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    session_dir = f"/team/team_pxi/workspace/juhojung/spatial_active_learning/sam_{target_lesion}_{timestamp}"
+    session_dir = f"/team/team_pxi/workspace/juhojung/spatial_active_learning/sparcl_{target_lesion}_{timestamp}"
     os.makedirs(session_dir, exist_ok=True)
     return session_dir
 

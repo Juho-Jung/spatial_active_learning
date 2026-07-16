@@ -16,16 +16,13 @@ __pycache__
 *.md
 !README.md
 
-baselines
-paper
-fewshot_sam_cal
+# External baseline repos (nnUNet, submodlib, EdgeAL, ALUNET) — anchored to root
+# so it does NOT shadow active_learning/sample_selection/baselines/ (tracked).
+/baselines
+/paper
+/fewshot_sam_cal
 /analysis
+/relabeling_update
 active_learning/figs/
-active_learning/sam_adaptation.py
-active_learning/sam_visualization_compare.py
-active_learning/sam_visualize.py
-active_learning/sample_selection/sample_selection_alunet.py
-active_learning/sample_selection/sample_selection_coreset.py
-active_learning/sample_selection/sample_selection_lunit.py
-active_learning/sample_selection/sample_selection_TAUDIS.py
+active_learning/legacy/
 /miccai_2026

@@ -1,4 +1,4 @@
-from .models import (LesionDecoder, LossPredictionModule, MCDropoutDecoder,
+from .segmentation import (LesionDecoder, LossPredictionModule, MCDropoutDecoder,
                      MCDropoutSAMModel, SAMLesionModel, SegmentationModel,
                      SegmentationModelWithLossPrediction, create_model)
 

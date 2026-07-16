@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Loss functions for SAM adaptation project.
+Loss functions for SPARCL.
 """
 
 import torch

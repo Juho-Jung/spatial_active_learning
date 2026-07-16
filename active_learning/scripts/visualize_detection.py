@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dataset.vindr_cxr_dataset import VinDrCXRDataset
+from dataset.public.vindr_cxr import VinDrCXRDataset
 
 
 def visualize_detection_samples(dataset, num_samples=5, output_dir='./detection_visualizations'):

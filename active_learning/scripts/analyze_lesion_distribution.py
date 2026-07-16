@@ -7,10 +7,15 @@ for experimental design.
 """
 
 import csv
+import os
+import sys
 from collections import defaultdict, Counter
 from pathlib import Path
 
-from dataset.vindr_cxr_dataset import CONCENTRATED_LESIONS, DISPERSED_LESIONS, LESION_MAPPING
+# Add active_learning/ (parent of scripts/) to path for flat imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from dataset.public.vindr_cxr import CONCENTRATED_LESIONS, DISPERSED_LESIONS, LESION_MAPPING
 
 
 def analyze_lesion_distribution(data_root='/team/team_pxi/pxi-dataset/cxr/public/vinbig'):

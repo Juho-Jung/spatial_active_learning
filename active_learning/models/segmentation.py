@@ -492,7 +492,7 @@ def create_model(args, device, checkpoint_path=None):
         model: Created model on device
     """
     import os
-    from .detection_models import create_detection_model
+    from .detection import create_detection_model
 
     # Determine task type
     task_type = getattr(args, 'task_type', None)
